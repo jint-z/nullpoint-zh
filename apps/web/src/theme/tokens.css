@@ -1,0 +1,200 @@
+/* Design tokens — PLAN.md §5.3, copied verbatim from design/Dashboard.dc.html DARK/LIGHT objects. */
+
+:root,
+[data-theme="dark"] {
+  --bg: #0b0c0e;
+  --panel: #121418;
+  --panel2: #191c21;
+  --line: #25292f;
+  --track: #1d2126;
+  --fg: #e7e9ec;
+  --fg2: #9ba2ab;
+  /* Hints and captions. Was #6b727c, which measured 3.8:1 against --panel — under the 4.5:1
+     readable threshold, and used at 10-11px where it matters most. Now 5.3:1, still clearly a
+     step below --fg2 so the hierarchy survives. */
+  --fg3: #838a94;
+  --stripe: #2a2f36;
+  --accent: #6ea6ef;
+  --accent-soft: rgba(110, 166, 239, 0.14);
+  --amber: #e0a15c;
+  --amber-soft: rgba(224, 161, 92, 0.14);
+  --ok: #7fc29b;
+  --ok-bg: rgba(127, 194, 155, 0.12);
+  --warn: #e58a6b;
+  --warn-bg: rgba(229, 138, 107, 0.1);
+  --warn-line: rgba(229, 138, 107, 0.32);
+  --ring: rgba(110, 166, 239, 0.55);
+  /* Text sitting on --accent. The two themes need opposite answers: the dark palette's accent
+     is a light blue, so it takes near-black (7.9:1) and would be 2.5:1 against white. */
+  --on-accent: #08090b;
+  --dot: #2e3238;
+  --knob: #0b0c0e;
+}
+
+[data-theme="light"] {
+  --bg: #f4f4f2;
+  --panel: #ffffff;
+  --panel2: #ededea;
+  --line: #deded8;
+  --track: #e4e4df;
+  --fg: #17191c;
+  --fg2: #565c64;
+  /* Measured against --bg, not --panel: the landing page sits on #f4f4f2, where the previous
+     #6f757e was 4.22:1 — under the readable threshold on exactly the small mono captions that
+     use it. This is 4.81:1 there and better still on a white panel. */
+  --fg3: #666c75;
+  --stripe: #dcdcd6;
+  --accent: #2c6bc9;
+  --accent-soft: rgba(44, 107, 201, 0.1);
+  --amber: #a9701f;
+  --amber-soft: rgba(169, 112, 31, 0.12);
+  --ok: #3c8a62;
+  --ok-bg: rgba(60, 138, 98, 0.1);
+  --warn: #b4552f;
+  --warn-bg: rgba(180, 85, 47, 0.08);
+  --warn-line: rgba(180, 85, 47, 0.28);
+  --ring: rgba(44, 107, 201, 0.45);
+  /* ...and the light palette's accent is a dark blue, so it takes white (5.2:1). The button was
+     hardcoded to near-black for both, which measured 3.85:1 here. */
+  --on-accent: #ffffff;
+  --dot: #d8d8d2;
+  --knob: #ffffff;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+}
+
+.mono {
+  font-family: "IBM Plex Mono", monospace;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+/* Screens fade and settle rather than cutting, so moving between the dashboard and settings
+   reads as one surface changing instead of a hard swap. Short enough not to feel sluggish on a
+   control you open and close constantly. */
+@keyframes screen-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.screen {
+  height: 100%;
+  animation: screen-in 0.22s cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .screen {
+    animation: none;
+  }
+  /* Collapsing sections snap rather than slide when motion is unwelcome. */
+  .measure * {
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* The one control in the window chrome. Weighted enough to read as a button, quiet enough not
+   to compete with the wordmark beside it. */
+.titlebar-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg2);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  padding: 5px 11px;
+  transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease;
+}
+
+.titlebar-action:hover:not(:disabled) {
+  color: var(--fg);
+  background: var(--panel2);
+  border-color: var(--line);
+}
+
+.titlebar-action:disabled {
+  color: var(--fg3);
+  font-weight: 500;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* The dashboard packs its panels into independent columns — see components/Masonry.tsx for
+   why that is a component and not a few lines of CSS here. Grid aligns items into rows, so a
+   short panel beside a tall one leaves a hole; multicol packs but rebalances every column
+   whenever anything changes height, which makes panels jump during a collapse animation. */
+
+/* Every screen needs an upper width bound as well as a lower one: on an ultrawide, content
+   would otherwise stretch the full width of the display and strand the controls in dead space.
+   Two widths — the dashboard is two columns of panels, everything else is a single column and
+   wants to be narrower for readability. */
+.measure {
+  width: 100%;
+  max-width: 1240px;
+  margin-inline: auto;
+}
+
+.measure-narrow {
+  width: 100%;
+  max-width: 880px;
+  margin-inline: auto;
+}
+
+/* A cap tuned for a laptop leaves an ultrawide looking like a narrow strip adrift in the middle
+   of the screen. Above these widths there is room for the panels to breathe without the
+   stretching the cap exists to prevent. */
+@media (min-width: 1800px) {
+  .measure {
+    max-width: 1440px;
+  }
+  .measure-narrow {
+    max-width: 1000px;
+  }
+}
+
+@media (min-width: 2400px) {
+  .measure {
+    max-width: 1640px;
+  }
+  .measure-narrow {
+    max-width: 1120px;
+  }
+}
+
+/* Horizontal padding that shrinks with the viewport, so the centred screens stay usable on a
+   phone instead of keeping their desktop gutters. */
+.pad-x {
+  padding-inline: clamp(20px, 6vw, 80px);
+}

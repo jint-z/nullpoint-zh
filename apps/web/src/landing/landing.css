@@ -1,0 +1,735 @@
+/* Landing page — extends the Nullpoint design tokens (theme/tokens.css).
+   The app's own visual language: hairline borders, no surface shadows, IBM Plex Sans for
+   reading and IBM Plex Mono as the structural/technical voice. */
+
+.lp {
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  /* Landing is authored dark-first; it ignores the app's light theme on purpose. */
+  --lp-max: 1080px;
+  /* The hero device deliberately overhangs the right edge. `clip` rather than `hidden` so it
+     is trimmed without turning this into a scroll container, which would break the
+     scroll-driven animation that reads the root scroller. */
+  overflow-x: clip;
+}
+
+.lp a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.lp-wrap {
+  max-width: var(--lp-max);
+  margin: 0 auto;
+  padding: 0 28px;
+}
+
+/* A measure set for a laptop reads as a narrow strip down the middle of an ultrawide. Give it
+   room on wide displays, but keep a ceiling — prose past roughly this width stops being
+   comfortable to read regardless of how much monitor there is. */
+@media (min-width: 1800px) {
+  .lp {
+    --lp-max: 1280px;
+  }
+}
+
+@media (min-width: 2400px) {
+  .lp {
+    --lp-max: 1420px;
+  }
+}
+
+/* ---------- nav ---------- */
+
+.lp-nav {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+
+.lp-nav-inner {
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.lp-mark {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-family: "IBM Plex Mono", monospace;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.22em;
+}
+
+/* The wordmark carries the app mark itself now — the zero from the icon — rather than a plain
+   dot. It inherits colour, so the accent setting still drives it. */
+.lp-mark svg {
+  color: var(--accent);
+}
+
+.lp-nav-links {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.lp-nav-link {
+  font-size: 13px;
+  color: var(--fg2);
+  padding: 8px 12px;
+  border-radius: 8px;
+  transition: color 0.16s ease, background 0.16s ease;
+}
+
+.lp-nav-link:hover {
+  color: var(--fg);
+  background: var(--panel2);
+}
+
+/* ---------- hero ---------- */
+
+.lp-hero {
+  padding: 88px 0 40px;
+}
+
+.lp-eyebrow {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  color: var(--fg3);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.lp-eyebrow-sep {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--fg3);
+  flex: none;
+}
+
+.lp-h1 {
+  margin: 22px 0 0;
+  font-size: clamp(34px, 5.6vw, 60px);
+  line-height: 1.04;
+  letter-spacing: -0.035em;
+  font-weight: 700;
+  max-width: 15ch;
+  text-wrap: balance;
+}
+
+.lp-h1 em {
+  font-style: normal;
+  color: var(--accent);
+}
+
+.lp-sub {
+  margin: 22px 0 0;
+  max-width: 56ch;
+  font-size: 16px;
+  line-height: 1.62;
+  color: var(--fg2);
+  text-wrap: pretty;
+}
+
+.lp-cta-row {
+  margin-top: 30px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.lp-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 13px 20px;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  border: 1px solid transparent;
+  transition: transform 0.16s ease, filter 0.16s ease, background 0.16s ease;
+}
+
+/* Buttons are surfaces too — never underline their label on hover. */
+.lp-btn:hover {
+  text-decoration: none;
+}
+
+.lp-btn:active {
+  transform: translateY(1px);
+}
+
+/* Scoped under .lp deliberately. `.lp a { color: inherit }` is a class plus an element, which
+   outweighs a lone class — so a bare `.lp-btn-primary` lost the colour fight and the label had
+   always been inherited --fg, never the value set here. That put near-black on the light
+   theme's dark blue and near-white on the dark theme's light blue: unreadable both ways, and
+   invisible to any amount of correcting the token itself. */
+.lp .lp-btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.lp-btn-primary:hover {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.lp .lp-btn-ghost {
+  border-color: var(--line);
+  color: var(--fg);
+}
+
+.lp-btn-ghost:hover {
+  background: var(--panel2);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+
+/* The OS mark sits with the label, sized to the cap height rather than the line box. */
+.lp-btn-os {
+  width: 15px;
+  height: 15px;
+  flex: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-btn,
+  .lp-btn-primary:hover {
+    transform: none;
+  }
+}
+
+.lp-cta-note {
+  margin-top: 14px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--fg3);
+}
+
+/* ---------- signature: live protocol frame ---------- */
+
+.lp-wire {
+  margin-top: 52px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.lp-wire-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 18px;
+  border-bottom: 1px solid var(--line);
+  flex-wrap: wrap;
+}
+
+.lp-wire-title {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--fg3);
+}
+
+.lp-wire-uuid {
+  margin-left: auto;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10.5px;
+  /* Was dimmed a further 25% on top of --fg3, which took it to 2.74:1. Small mono text needs
+     the colour it is given, not a fraction of it. */
+  color: var(--fg3);
+}
+
+.lp-wire-body {
+  padding: 20px 18px 22px;
+}
+
+.lp-modes {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  /* No gap: the indicator is exactly a third wide and steps by its own width. */
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--track);
+  border: 1px solid var(--line);
+  max-width: 460px;
+}
+
+/* One indicator that slides to the chosen mode, so switching reads as the same object moving
+   rather than three cells lighting up in turn. It carries the border, without which the muted
+   "Off" state is nearly invisible against the track. */
+.lp-mode-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px) / 3);
+  border-radius: 8px;
+  border: 1px solid var(--fg2);
+  background: var(--panel2);
+  box-shadow: 0 6px 14px -8px rgb(0 0 0 / 0.85), 0 1px 0 0 rgb(255 255 255 / 0.04) inset;
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), background 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.lp-mode-thumb[data-index="0"] {
+  transform: translateX(0);
+}
+.lp-mode-thumb[data-index="1"] {
+  transform: translateX(100%);
+}
+.lp-mode-thumb[data-index="2"] {
+  transform: translateX(200%);
+}
+
+.lp-mode-thumb[data-tone="accent"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent-soft) 70%, var(--panel));
+}
+
+.lp-mode-thumb[data-tone="amber"] {
+  border-color: var(--amber);
+  background: color-mix(in srgb, var(--amber-soft) 70%, var(--panel));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-mode-thumb {
+    transition: background 0.2s ease, border-color 0.2s ease;
+  }
+}
+
+.lp-mode {
+  /* Above the indicator: it is absolutely positioned, so without a stacking context of their
+     own the labels get painted over by it. */
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  height: 50px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg3);
+  cursor: pointer;
+  /* The selected mode rises out of the track as a solid button, so the control reads as one
+     thing being picked rather than three boxes with one outlined. Unselected segments stay
+     flat and borderless, which is what leaves room for the chosen one to lift. */
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease,
+    transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.lp-mode:hover:not([aria-checked="true"]) {
+  color: var(--fg2);
+}
+
+.lp-mode-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.lp-mode-sub {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  /* 9.5px is the smallest type on the page; at 0.66 opacity it measured 2.39:1. */
+  color: var(--fg3);
+}
+
+/* The indicator carries the surface, so a selected cell only changes its label colour. */
+.lp-mode[aria-checked="true"][data-tone="accent"] {
+  color: var(--accent);
+}
+
+.lp-mode[aria-checked="true"][data-tone="amber"] {
+  color: var(--amber);
+}
+
+.lp-mode[aria-checked="true"][data-tone="mute"] {
+  color: var(--fg);
+}
+
+.lp-wire-caption {
+  margin: 22px 0 12px;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--fg2);
+  max-width: 62ch;
+}
+
+/* the byte strip */
+.lp-bytes {
+  display: flex;
+  gap: 14px;
+  overflow-x: auto;
+  padding-bottom: 6px;
+}
+
+.lp-seg {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  flex: none;
+}
+
+.lp-seg-bytes {
+  display: flex;
+  gap: 5px;
+}
+
+.lp-byte {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 7px 6px;
+  border-radius: 6px;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  color: var(--fg2);
+  min-width: 32px;
+  text-align: center;
+  transition: background 0.24s ease, color 0.24s ease, border-color 0.24s ease;
+}
+
+.lp-seg[data-role="payload"] .lp-byte {
+  color: var(--fg);
+}
+
+.lp-byte[data-changed="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.lp-seg-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  color: var(--fg3);
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+
+/* ---------- sections ---------- */
+
+.lp-section {
+  padding: 64px 0;
+  border-top: 1px solid var(--line);
+}
+
+.lp-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.lp-h2 {
+  margin: 0;
+  font-size: 24px;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+}
+
+.lp-section-note {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  color: var(--fg3);
+}
+
+.lp-grid {
+  margin-top: 26px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px;
+}
+
+.lp-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.lp-card-title {
+  margin-top: 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.lp-card-body {
+  margin-top: 7px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--fg2);
+  text-wrap: pretty;
+}
+
+/* ---------- downloads ---------- */
+
+.lp-dl {
+  margin-top: 26px;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 12px;
+}
+
+.lp-dl-card {
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  transition: border-color 0.22s ease, background 0.22s ease, transform 0.22s ease,
+    box-shadow 0.22s ease;
+}
+
+.lp-dl-card[data-primary="true"] {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
+/* A card is a surface, not a sentence: it lifts toward the reader instead of underlining
+   every word inside it. The underline reset is on the card itself because the global a:hover
+   rule sets it there, and a descendant cannot remove an ancestor's decoration. */
+.lp-dl-card:hover {
+  background: var(--panel2);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px -14px rgb(0 0 0 / 0.7);
+  text-decoration: none;
+}
+
+/* The arrow leads the eye in the direction the card takes you. */
+.lp-dl-card:hover .lp-dl-action {
+  color: var(--accent);
+}
+
+.lp-dl-action {
+  transition: color 0.22s ease;
+}
+
+.lp-dl-card:active {
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp-dl-card {
+    transition: border-color 0.22s ease, background 0.22s ease;
+  }
+  .lp-dl-card:hover {
+    transform: none;
+  }
+}
+
+.lp-dl-os {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.lp-dl-meta {
+  margin-top: 5px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--fg3);
+}
+
+.lp-dl-body {
+  margin-top: 12px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--fg2);
+  flex: 1;
+}
+
+.lp-dl-action {
+  margin-top: 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* ---------- footer ---------- */
+
+.lp-footer {
+  border-top: 1px solid var(--line);
+  padding: 34px 0 54px;
+}
+
+.lp-disclaimer {
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--fg3);
+  max-width: 74ch;
+}
+
+.lp-footer-links {
+  margin-top: 18px;
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--fg2);
+}
+
+.lp-footer-links a:hover {
+  color: var(--fg);
+}
+
+/* ---------- motion ---------- */
+
+@keyframes lp-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.lp-rise {
+  animation: lp-rise 0.55s cubic-bezier(0.22, 0.7, 0.2, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lp *,
+  .lp *::before,
+  .lp *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Keyboard focus must stay visible everywhere on the page. */
+.lp :focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--ring);
+  border-radius: 8px;
+}
+
+@media (max-width: 620px) {
+  .lp-hero {
+    padding-top: 56px;
+  }
+  .lp-wire-uuid {
+    display: none;
+  }
+}
+
+/* ---------- hero device ---------- */
+
+/* The product, cut out of its backdrop and oversized, running off the bottom of the hero so the
+   protocol panel below crops it. A boxed photo on a plate read as a stock image dropped into a
+   frame; letting it break the grid is what makes it look like it belongs to the page.
+
+   Behind the copy and non-interactive, so it can be as large as it likes without ever getting
+   between a reader and the download button. */
+.lp-hero {
+  position: relative;
+}
+
+.lp-device {
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+  /* Anchored to the right edge and allowed past it — the crop is the point. */
+  /* Pulled in off the right edge — hanging it at the margin left the drawing stranded away
+     from the copy it belongs with. */
+  right: clamp(8px, 3.5vw, 72px);
+  top: 34px;
+  /* A drawing, not a photograph — it needs no shadow, and it wants to be wider than the tall
+     product crop was. */
+  width: clamp(300px, 42vw, 520px);
+  color: var(--fg);
+  will-change: transform;
+}
+
+.lp-device img,
+.lp-device svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* Everything readable sits above it. */
+.lp-eyebrow,
+.lp-h1,
+.lp-sub,
+.lp-cta-row,
+.lp-cta-note {
+  position: relative;
+  z-index: 2;
+}
+
+/* The panel is opaque, so it does the cropping simply by being painted after. */
+.lp-wire {
+  position: relative;
+  z-index: 1;
+}
+
+/* Under about 1080px the copy needs the full width, so the device stops competing: it drops
+   behind at low contrast rather than shrinking into an awkward sliver beside the headline. */
+@media (max-width: 1080px) {
+  .lp-device {
+    width: min(56vw, 340px);
+    right: -10vw;
+    top: auto;
+    bottom: -60px;
+    opacity: 0.18;
+    filter: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .lp-device {
+    display: none;
+  }
+}
+
+/* Scroll-driven, off the root scroller rather than view(): the device is above the fold, so a
+   view() timeline would already have finished before anyone scrolled. Without support the image
+   simply sits still, which costs nothing. */
+@keyframes lp-device-drift {
+  from {
+    transform: translateY(0) rotate(0deg) scale(1);
+  }
+  to {
+    transform: translateY(-90px) rotate(-7deg) scale(1.1);
+  }
+}
+
+@supports (animation-timeline: scroll()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .lp-device {
+      animation: lp-device-drift linear both;
+      animation-timeline: scroll(root);
+      animation-range: 0 90vh;
+    }
+  }
+}

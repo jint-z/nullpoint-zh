@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    name: build + typecheck + test (${{ matrix.os }})
+    # Matrix covers both platforms the web build targets (any OS) and the one
+    # apps/desktop packages for (Windows) — PLAN.md M6 "build web + electron matrix".
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Version comes from "packageManager" in package.json; setting it here too is an error.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Build first: packages consume each other through their built .d.ts files, so a clean
+      # checkout has nothing for typecheck to resolve until the dependencies are compiled.
+      # pnpm -r runs these in workspace dependency order.
+      - name: Build
+        run: pnpm -r run build
+
+      - name: Typecheck
+        run: pnpm -r run typecheck
+
+      - name: Test
+        run: pnpm -r run test

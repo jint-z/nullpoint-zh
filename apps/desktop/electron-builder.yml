@@ -1,0 +1,86 @@
+appId: ir.ali-dadashzadeh.nullpoint
+productName: Nullpoint
+copyright: Copyright © 2026 Nullpoint contributors. Not affiliated with Sony Group Corporation.
+
+directories:
+  output: release
+  buildResources: build
+
+# dist-electron/ is the compiled main+preload; assets/ holds the tray icon, loaded at runtime.
+files:
+  - dist-electron/**/*
+  - assets/**/*
+  - package.json
+
+# The renderer is the web app's production build, served over the app:// protocol (see main.ts).
+extraResources:
+  - from: ../web/dist
+    to: renderer
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Nullpoint
+  # Artwork is generated, not drawn by hand — see scripts/make-installer-art.cjs. The wave from
+  # the app icon runs down the sidebar and settles flat; the uninstaller runs it back in amber.
+  installerHeader: build/installerHeader.bmp
+  installerSidebar: build/installerSidebar.bmp
+  uninstallerSidebar: build/uninstallerSidebar.bmp
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  # Apache-2.0. Worth showing given the app talks to hardware over an undocumented protocol.
+  license: ../../LICENSE
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+
+mac:
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+  category: public.app-category.utilities
+  # electron-builder converts this to .icns at build time.
+  icon: build/icon.png
+  # Menu-bar resident: main.ts hides the Dock icon while no window is open.
+  extendInfo:
+    LSUIElement: false
+  # We have no Apple identity, so electron-builder skips signing; scripts/adhoc-sign.cjs then
+  # ad-hoc signs the bundle, without which Apple Silicon refuses to launch it at all.
+  identity: null
+
+# The styled drag-to-install window is held back until it can be tested on a Mac.
+#
+# Setting `background` or `contents` makes electron-builder lay the window out by driving Finder
+# over AppleScript. On a headless CI runner that leaves the mounted volume busy, and the build
+# dies on `hdiutil detach` after six retries — every release before this one produced its disk
+# images precisely because there was no dmg block here.
+#
+# The artwork is generated and waiting in build/dmg/ (background.png and its @2x). To restore,
+# put this back and verify it on real hardware, not in CI:
+#
+#   dmg:
+#     title: Nullpoint ${version}
+#     background: build/dmg/background.png
+#     window: { width: 540, height: 380 }
+#     iconSize: 96
+#     contents:
+#       - { x: 150, y: 232, type: file }
+#       - { x: 390, y: 232, type: link, path: /Applications }
+#
+# The arrow in the background art is drawn to sit between those two icon centres, so the
+# coordinates and the image have to change together.
+
+afterPack: scripts/adhoc-sign.cjs
+
+linux:
+  target: [AppImage]
+  category: Utility

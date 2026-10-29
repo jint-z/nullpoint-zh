@@ -1,0 +1,382 @@
+import { tr } from "../i18n.js";
+import { useEffect, useRef, useState } from "react";
+import type { Headphones, HeadphonesState } from "@ssc/core";
+import { AmbientSoundMode, BatteryChargingStatus, EqPresetId, noiseModeFromState, type EqBands } from "@ssc/core";
+import { customEqKey, type EqProfile } from "../state/useSettings.js";
+import { TitleBar } from "./TitleBar.js";
+import { DeviceArt } from "../components/DeviceArt.js";
+import { Masonry } from "../components/Masonry.js";
+import { ConnectedDevices } from "../components/ConnectedDevices.js";
+import { SoundSettings } from "../components/SoundSettings.js";
+import { NowPlaying } from "../components/NowPlaying.js";
+import { NoiseModeSegmented } from "../components/NoiseModeSegmented.js";
+import { AmbientLevelSlider } from "../components/AmbientLevelSlider.js";
+import { EqualizerPanel } from "../components/EqualizerPanel.js";
+
+const SYNC_TAG_DURATION_MS = 4000; // design §5.3 rule 5
+
+/** design/SoundConnect Desktop.dc.html §1c — header, NOISE CONTROL / EQUALIZER, reconnect banner. */
+export function Dashboard({
+  state,
+  headphones,
+  onSettingsClick,
+  reconnecting,
+  reconnectReason = "gone",
+  controlLost = false,
+  savedCustomEq,
+  onCustomEqChange,
+  eqProfiles = [],
+  speakToChatLocked,
+  onLockSpeakToChange,
+  onSaveEqProfile,
+  onDeleteEqProfile,
+  onCancelReconnect,
+}: {
+  state: HeadphonesState;
+  headphones: Headphones;
+  onSettingsClick: () => void;
+  reconnecting: boolean;
+  /** Why we are reconnecting: the channel is taken, or the headset is simply not there. */
+  reconnectReason?: "busy" | "gone";
+  /** Link is up, but another device holds the control channel — see useHeadphones. */
+  controlLost?: boolean;
+  /** Persisted user equalizer curves, keyed by customEqKey(). */
+  savedCustomEq?: Record<string, number[]>;
+  onCustomEqChange?: (key: string, values: number[]) => void;
+  /** Named curves the app stores on the user's behalf; the headset can't keep them. */
+  eqProfiles?: EqProfile[];
+  speakToChatLocked?: boolean;
+  onLockSpeakToChange?: (value: boolean | undefined) => void;
+  onSaveEqProfile?: (name: string, bands: EqBands) => void;
+  onDeleteEqProfile?: (id: string) => void;
+  onCancelReconnect: () => void;
+}) {
+  const battery = state.battery;
+  const low = (battery?.level ?? 100) <= 15;
+  const charging = battery?.charging === BatteryChargingStatus.CHARGING;
+  const ncAsm = state.ncAsm;
+
+  // "UPDATED FROM DEVICE" tag (design §5.3 rule 5) — fades in for 4s when NOISE CONTROL changes
+  // because the device pushed it (touch sensor, phone app), not because we wrote it here.
+  const [ncAsmSynced, setNcAsmSynced] = useState(false);
+  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const unsubscribe = headphones.on((event) => {
+      if (event.type === "ncAsm" && event.origin === "device") {
+        setNcAsmSynced(true);
+        if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+        syncTimerRef.current = setTimeout(() => setNcAsmSynced(false), SYNC_TAG_DURATION_MS);
+      }
+    });
+    return () => {
+      unsubscribe();
+      if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+    };
+  }, [headphones]);
+
+  return (
+    <div className="screen" style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
+      <TitleBar statusColor={reconnecting ? "var(--warn)" : "var(--ok)"} onSettingsClick={onSettingsClick} />
+
+      {tr(reconnecting && (
+        <div
+          style={{
+            flex: "none",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "9px 20px",
+            background: "var(--warn-bg)",
+            borderBottom: "1px solid var(--warn-line)",
+          }}
+        >
+          <div
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: "50%",
+              background: "var(--warn)",
+              animation: "np-pulse 1.4s ease-in-out infinite",
+            }}
+          />
+          <div style={{ fontWeight: 500, fontSize: 12, lineHeight: 1.35, color: "var(--warn)" }}>
+            {tr(reconnectReason === "busy"
+              ? "Another device is holding the settings channel — taking it back. Your music is unaffected. If it doesn't return, disconnect the headphones from your phone."
+              : `Link lost — reconnecting to ${state.modelName ?? "your headphones"}…`)}
+          </div>
+          <div style={{ flex: 1 }} />
+          <button
+            onClick={onCancelReconnect}
+            className="mono"
+            style={{
+              fontWeight: 500,
+              fontSize: 11,
+              letterSpacing: "0.08em",
+              color: "var(--warn)",
+              border: "1px solid var(--warn-line)",
+              background: "none",
+              padding: "5px 9px",
+              borderRadius: 6,
+            }}
+          >
+            {tr("CANCEL")}</button>
+          <style>{tr("@keyframes np-pulse { 0% { opacity: .95 } 50% { opacity: .3 } 100% { opacity: .95 } }")}</style>
+        </div>
+      ))}
+
+      {tr(controlLost && !reconnecting && (
+        <div
+          style={{
+            flex: "none",
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "9px 20px",
+            background: "var(--amber-soft)",
+            borderBottom: "1px solid var(--amber)",
+          }}
+        >
+          <div style={{ width: 7, height: 7, borderRadius: "50%", flex: "none", background: "var(--amber)" }} />
+          {/* We know the headset stopped answering; we do not know why. Naming the phone as
+              the culprit was a guess that read as fact. */}
+          <div style={{ fontWeight: 500, fontSize: 12, lineHeight: 1.35, color: "var(--amber)" }}>
+            {tr("Your headphones stopped answering — taking the settings channel back. If your phone is connected, it may be holding it.")}</div>
+        </div>
+      ))}
+
+      <div
+        className="measure"
+        style={{ flex: "none", display: "flex", alignItems: "center", gap: 16, padding: "18px 20px 16px" }}
+      >
+        <div
+          style={{
+            width: 52,
+            height: 52,
+            flex: "none",
+            borderRadius: 10,
+            border: "1px solid var(--line)",
+            backgroundColor: "var(--panel2)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <DeviceArt model={state.modelName} size={38} />
+        </div>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+            <div style={{ fontWeight: 600, fontSize: 19, letterSpacing: "-0.01em", color: "var(--fg)" }}>
+              {state.modelName ?? tr("Unknown model")}
+            </div>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 5,
+                padding: "3px 7px",
+                borderRadius: 5,
+                background: reconnecting
+                  ? "var(--warn-bg)"
+                  : controlLost
+                    ? "var(--amber-soft)"
+                    : "var(--ok-bg)",
+              }}
+            >
+              <div
+                style={{
+                  width: 5,
+                  height: 5,
+                  borderRadius: "50%",
+                  background: reconnecting ? "var(--warn)" : controlLost ? "var(--amber)" : "var(--ok)",
+                }}
+              />
+              <div
+                className="mono"
+                style={{
+                  fontWeight: 500,
+                  fontSize: 10,
+                  letterSpacing: "0.1em",
+                  color: reconnecting ? "var(--warn)" : controlLost ? "var(--amber)" : "var(--ok)",
+                }}
+              >
+                {tr(reconnecting ? "LAST KNOWN" : controlLost ? "NO CONTROL" : "LINKED")}
+              </div>
+            </div>
+          </div>
+          <div className="mono" style={{ marginTop: 5, fontSize: 11.5, color: "var(--fg3)" }}>
+            {tr("FW")}{state.firmwareVersion ?? "?"}
+          </div>
+        </div>
+        <div style={{ flex: 1 }} />
+        {tr(battery && (
+          <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+            <div style={{ textAlign: "right" }}>
+              <div
+                className="mono"
+                style={{ fontWeight: 600, fontSize: 22, color: low ? "var(--warn)" : "var(--fg)" }}
+              >
+                {tr(battery.level)}%
+              </div>
+              <div className="mono" style={{ marginTop: 5, fontSize: 10, letterSpacing: "0.1em", color: "var(--fg3)" }}>
+                {tr(charging ? "CHARGING" : low ? "LOW" : "OK")}
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 2 }}>
+              <div
+                style={{
+                  width: 30,
+                  height: 15,
+                  borderRadius: 3,
+                  border: "1.5px solid var(--fg3)",
+                  padding: 2,
+                  display: "flex",
+                }}
+              >
+                <div
+                  style={{
+                    width: `${battery.level}%`,
+                    borderRadius: 1,
+                    background: low ? "var(--warn)" : "var(--ok)",
+                  }}
+                />
+              </div>
+              <div style={{ width: 2.5, height: 6, borderRadius: "0 2px 2px 0", background: "var(--fg3)" }} />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Scrolling and laying out were the same element, which is what broke: a layout container
+          with a constrained height can't flow its own overflow. The outer div scrolls, the
+          Masonry inside is free to be as tall as its contents. */}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          overflowY: "auto",
+          padding: "0 20px 20px",
+          opacity: reconnecting || controlLost ? 0.6 : 1,
+          pointerEvents: reconnecting || controlLost ? "none" : "auto",
+          transition: "opacity .18s ease",
+        }}
+      >
+        <div className="measure">
+        <Masonry>
+        {tr(ncAsm ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 15, border: "1px solid var(--line)", borderRadius: 12, background: "var(--panel)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: 16 }}>
+              <div className="mono" style={{ fontWeight: 600, fontSize: 11, letterSpacing: "0.14em", color: "var(--fg3)" }}>
+                {tr("NOISE CONTROL")}</div>
+              {tr(ncAsmSynced && (
+                <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                  <div style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--accent)" }} />
+                  <div className="mono" style={{ fontWeight: 500, fontSize: 10, letterSpacing: "0.06em", color: "var(--accent)" }}>
+                    {tr("UPDATED FROM DEVICE")}</div>
+                </div>
+              ))}
+            </div>
+            <NoiseModeSegmented
+              value={noiseModeFromState(ncAsm)}
+              onChange={(mode) => void headphones.setNoiseMode(mode)}
+            />
+            <AmbientLevelSlider
+              active={noiseModeFromState(ncAsm) === "ambient"}
+              level={ncAsm.ambientLevel}
+              focusOnVoice={ncAsm.ambientMode === AmbientSoundMode.VOICE}
+              autoAmbient={ncAsm.autoAmbient}
+              onLevelChange={(level) => void headphones.setAmbientLevel(level)}
+              onFocusOnVoiceChange={(enabled) => void headphones.setFocusOnVoice(enabled)}
+              onAutoAmbientChange={(enabled, sensitivity) =>
+                void headphones.setAutoAmbient(enabled, sensitivity)
+              }
+            />
+          </div>
+        ) : null)}
+
+        {tr(state.eq ? (
+          <EqualizerPanel
+            preset={state.eq.preset}
+            bands={state.eq.bands}
+            onPresetChange={(preset) => {
+              // Selecting Custom restores the curve the user built, which the headset itself
+              // does not remember — a named preset overwrites the bands outright.
+              const layout = state.eq?.bands?.layout;
+              const saved = layout ? savedCustomEq?.[customEqKey(state.modelName, layout)] : undefined;
+              const restore =
+                preset === EqPresetId.CUSTOM && saved && layout
+                  ? { layout, values: saved }
+                  : undefined;
+              void headphones.setEqPreset(preset, restore);
+            }}
+            onBandChange={(index, value) => {
+              const current = state.eq?.bands;
+              if (!current) return;
+              const values = [...current.values];
+              values[index] = value;
+              // Remember it: this is the user's own curve, and the device will lose it the
+              // moment a preset is chosen.
+              onCustomEqChange?.(customEqKey(state.modelName, current.layout), values);
+              void headphones.setEqBands({ ...current, values });
+            }}
+            profiles={eqProfiles}
+            onApplyProfile={(profile) => {
+              const bands = { layout: profile.layout as EqBands["layout"], values: profile.values };
+              // Applying a saved curve means selecting Custom and sending it, since a named
+              // preset would overwrite the bands with its own.
+              onCustomEqChange?.(customEqKey(state.modelName, bands.layout), profile.values);
+              void headphones.setEqPreset(EqPresetId.CUSTOM, bands);
+            }}
+            onSaveProfile={onSaveEqProfile ?? (() => {})}
+            onDeleteProfile={onDeleteEqProfile ?? (() => {})}
+          />
+        ) : null)}
+
+        <NowPlaying
+          playback={state.playback}
+          volume={state.volume}
+          codec={state.codec}
+          onPlayPause={() => void headphones.playPause()}
+          onNext={() => void headphones.nextTrack()}
+          onPrevious={() => void headphones.previousTrack()}
+          onVolumeChange={(level) => void headphones.setVolume(level)}
+        />
+
+        <SoundSettings
+          connectionMode={state.connectionMode}
+          upscaling={state.upscaling}
+          speakToChat={state.speakToChat}
+          pauseOnRemoval={state.pauseOnRemoval}
+          headGesture={state.headGesture}
+          autoPowerOff={state.autoPowerOff}
+          bgmMode={state.bgmMode}
+          upmixCinema={state.upmixCinema}
+          upmixSeries={state.upmixSeries}
+          onConnectionModeChange={(mode) => void headphones.setConnectionMode(mode)}
+          onUpscalingChange={(value) => void headphones.setUpscaling(value)}
+          onSpeakToChatChange={(next) => void headphones.setSpeakToChat(next)}
+          speakToChatLocked={speakToChatLocked}
+          onLockSpeakToChange={onLockSpeakToChange}
+          onPauseOnRemovalChange={(enabled) => void headphones.setPauseOnRemoval(enabled)}
+          onHeadGestureChange={(enabled) => void headphones.setHeadGesture(enabled)}
+          onAutoPowerOffChange={(value) => void headphones.setAutoPowerOff(value)}
+          onBgmModeChange={(next) => void headphones.setBgmMode(next)}
+          onUpmixCinemaChange={(enabled) => void headphones.setUpmixCinema(enabled)}
+          onUpmixSeriesChange={(item) => void headphones.setUpmixSeries(item)}
+        />
+
+        {/* Packs into whichever column is next rather than spanning the width: stretched across
+            an ultrawide, three device rows leave an enormous gap between the name and its
+            buttons. Absent entirely on headphones that don't report a list. */}
+        {tr(state.pairedDevices && (
+          <ConnectedDevices
+            devices={state.pairedDevices}
+            onSetConnection={(address, connect) => headphones.setDeviceConnection(address, connect)}
+            onSwitchAudio={(address) => headphones.switchAudioTo(address)}
+          />
+        ))}
+        </Masonry>
+        </div>
+      </div>
+    </div>
+  );
+}

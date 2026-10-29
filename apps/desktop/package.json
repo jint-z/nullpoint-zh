@@ -1,0 +1,23 @@
+{
+  "name": "@ssc/desktop",
+  "version": "1.2.0",
+  "private": true,
+  "description": "Nullpoint desktop app (Electron) — tray resident, Windows and macOS",
+  "license": "Apache-2.0",
+  "main": "dist-electron/main.js",
+  "scripts": {
+    "dev": "tsc -p tsconfig.json && electron .",
+    "build": "node scripts/sync-i18n.cjs && tsc -p tsconfig.json",
+    "typecheck": "node scripts/sync-i18n.cjs && tsc -p tsconfig.json --noEmit",
+    "package": "pnpm --filter @ssc/web run build && pnpm run build && electron-builder --config electron-builder.yml",
+    "package:win": "pnpm run package --win",
+    "art": "electron scripts/make-installer-art.cjs",
+    "icons": "electron ../../scripts/make-icons.cjs && python ../../scripts/derive-icons.py"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "electron": "^32.2.5",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.6.3"
+  }
+}

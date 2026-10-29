@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <title>Nullpoint — desktop and web control for Sony headphones</title>
+    <meta
+      name="description"
+      content="Control noise canceling, ambient sound and the equalizer on your Sony headphones from Windows, macOS or your browser. Free and open source, not affiliated with Sony."
+    />
+    <meta name="theme-color" content="#0b0c0e" />
+
+    <link rel="icon" href="/favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+    <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Nullpoint" />
+    <meta property="og:title" content="Nullpoint — desktop and web control for Sony headphones" />
+    <meta
+      property="og:description"
+      content="Sony never made a desktop app for your headphones. This is it. Noise canceling, ambient sound and EQ on Windows, macOS and the web."
+    />
+    <meta property="og:image" content="/og-image.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <!-- manifest link + service worker are injected by vite-plugin-pwa (see vite.config.ts) -->
+
+    <!--
+      Resolve the theme before the first paint. The stylesheet's default palette is dark, so a
+      light-mode machine would otherwise flash dark for as long as it takes React to boot. Reads
+      the saved preference directly because the settings hook hasn't run yet.
+    -->
+    <script>
+      (function () {
+        try {
+          var saved = JSON.parse(localStorage.getItem("nullpoint.settings") || "{}");
+          var theme = saved.theme || "system";
+          if (theme === "system") {
+            theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+          }
+          document.documentElement.setAttribute("data-theme", theme);
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

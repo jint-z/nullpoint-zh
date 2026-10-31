@@ -1,8 +1,21 @@
-# Nullpoint 中文便携版使用说明
+# Nullpoint 中文版使用说明
 
 Nullpoint 是独立开发的非官方索尼耳机控制程序，与 Sony 没有关联。此版本基于 v1.2.0（b406e1a），提供简体中文和英文界面。许可证及协议来源见本目录的 LICENSE、NOTICE 和 Electron/Chromium 随附许可文件。
 
-## 启动与语言
+## Windows 安装版
+
+从本仓库的 Releases 下载 `Nullpoint-zh-Setup-1.2.0-x64.exe`，在 Windows 10/11 x64 上运行安装向导。安装时可以选择目录，向导会创建“Nullpoint 中文版”开始菜单和桌面快捷方式；也可以从 Windows 的“已安装的应用”中卸载。安装版与上游程序使用不同的应用标识、快捷方式和开机启动项。
+
+安装版将设置和会话数据保存在 `%APPDATA%\Nullpoint-zh`，与安装目录分开。卸载默认保留此目录，以便重新安装后继续使用；如果确认不再需要设置，可以在退出程序后手动删除该目录。安装包的签名状态及已验证范围以对应 Release 说明为准。
+
+### 从中文便携版手动迁移设置
+
+1. 先从托盘菜单完全退出便携版和安装版；如安装版尚未运行过，先启动一次再完全退出，使配置目录创建完成。
+2. 打开便携版 `Nullpoint.exe` 旁的 `nullpoint-data` 文件夹，以及安装版的 `%APPDATA%\Nullpoint-zh` 文件夹。
+3. 如安装版已有 `settings.json`，先备份；然后将便携版的 `settings.json` 复制到安装版目录，不要复制缓存、浏览器会话或整个数据文件夹。
+4. 重新启动安装版并检查语言、自动重连、快捷键和其他设置。迁移仅复制文件，不会删除便携版原有数据。
+
+## 中文便携版
 
 在 Windows 10/11 上运行 `Nullpoint.exe`，无需安装。右下角的 `EN` 按钮切换英文，`中文` 按钮切回简体中文；语言设置会保存。程序默认关闭窗口后继续在系统托盘运行，要完全退出请右键托盘图标选择“退出 Nullpoint”。
 
@@ -28,9 +41,11 @@ Nullpoint 是独立开发的非官方索尼耳机控制程序，与 Sony 没有�
 
 - 用户此前在原版实测三种降噪模式可切换，但偶发延迟；本汉化版未对延迟作修复或真机复测。EQ 和多点等其他功能应以你自己的设备实测为准。
 - 状态变化和 ACK 不总能证明耳机实际采用了设置；必要时重新读取，并结合实际声音或设备行为核对。建议在测试前记录原设置，测试后恢复。
-- 未加入固件更新、Sony 账号或云功能。Windows 原发行程序没有 Authenticode 数字签名；汉化版使用该发行程序的运行时，并替换本地应用资源，没有新的签名。
+- 未加入固件更新、Sony 账号或云功能。原版 Windows 发行程序和现有中文便携版没有 Authenticode 数字签名；安装包的签名状态以 Release 说明为准。
 - 安全和兼容性检查不能覆盖所有依赖、系统及固件；未完成与真实耳机连接的汉化版验收。
 
 ## 源码与构建
 
-源码位于交付目录的 `source` 文件夹。使用 Node.js 22+ 和 pnpm 11.21.0；按锁文件安装依赖后执行 `pnpm -r run build`、`pnpm -r run typecheck` 和 `pnpm -r run test`。Windows 便携版复用了原发行包的 Electron 运行时，使用构建后的应用代码和页面资源；并非新的官方发行版。
+使用 Node.js 22+ 和 pnpm 11.21.0，运行 `pnpm install --frozen-lockfile`，然后执行 `pnpm -r run build`、`pnpm -r run typecheck` 和 `pnpm -r run test`。桌面设置与安装版配置检查分别为 `node validation/settings-check.cjs` 和 `node validation/install-profile-check.cjs`。在 Windows 上运行 `pnpm --filter @ssc/desktop exec electron-builder --config electron-builder.yml --win --x64`，安装包输出到 `apps/desktop/release/`。
+
+已有 Windows 便携版复用了原发行包的 Electron 运行时，并替换了本地应用资源；安装版由本仓库源码构建。两者均为非官方版本。

@@ -1,5 +1,5 @@
-appId: ir.ali-dadashzadeh.nullpoint
-productName: Nullpoint
+appId: io.github.jint-z.nullpoint-zh
+productName: Nullpoint 中文版
 copyright: Copyright © 2026 Nullpoint contributors. Not affiliated with Sony Group Corporation.
 
 directories:
@@ -16,20 +16,30 @@ files:
 extraResources:
   - from: ../web/dist
     to: renderer
+    filter:
+      - "**/*"
+      - "!mock-*.html"
+  - from: ../../LICENSE
+    to: LICENSE
+  - from: ../../NOTICE
+    to: NOTICE
 
 win:
+  # An ASCII executable name also gives NSIS a distinct default install directory.
+  executableName: Nullpoint-zh
   target:
     - target: nsis
       arch: [x64]
   icon: build/icon.ico
 
 nsis:
+  artifactName: Nullpoint-zh-Setup-${version}-${arch}.${ext}
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: Nullpoint
+  shortcutName: Nullpoint 中文版
   # Artwork is generated, not drawn by hand — see scripts/make-installer-art.cjs. The wave from
   # the app icon runs down the sidebar and settles flat; the uninstaller runs it back in amber.
   installerHeader: build/installerHeader.bmp

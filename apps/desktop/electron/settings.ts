@@ -1,6 +1,7 @@
 import { app } from "electron";
 import fs from "node:fs";
 import path from "node:path";
+import { WINDOWS_LOGIN_ITEM_NAME } from "./profile.js";
 
 export interface DesktopSettings {
   /** Start Nullpoint when you log in, with no window (it just appears in the tray). */
@@ -81,5 +82,6 @@ export function applyLoginItemSetting(enabled: boolean): void {
     openAtLogin: enabled,
     openAsHidden: true,
     args: ["--hidden"],
+    ...(process.platform === "win32" ? { name: WINDOWS_LOGIN_ITEM_NAME } : {}),
   });
 }

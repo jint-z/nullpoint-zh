@@ -40,3 +40,8 @@ jobs:
 
       - name: Test
         run: pnpm -r run test
+
+      - name: Test desktop settings and installed profile
+        run: |
+          node validation/settings-check.cjs
+          node validation/install-profile-check.cjs

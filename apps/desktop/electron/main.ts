@@ -1,5 +1,6 @@
 import { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, net, protocol, session } from "electron";
 import path from "node:path";
+import { configureWindowsProfile } from "./profile.js";
 import translations from "./translations.json";
 const words: Record<string, string> = translations;
 function menuText(english: string): string { return readSettings().language === "en" ? english : (words[english] ?? english); }
@@ -17,8 +18,13 @@ import {
 
 const DEV_SERVER_URL = process.env.ELECTRON_RENDERER_URL ?? "http://localhost:5173";
 const isDev = !app.isPackaged;
-// Keep the portable build and login-started instances separate from upstream profiles.
-if (app.isPackaged) app.setPath("userData", path.join(path.dirname(process.execPath), "nullpoint-data"));
+// An installed Windows app may live in a read-only directory. Configure its isolated,
+// per-user profile before Electron creates a session or obtains its single-instance lock.
+if (app.isPackaged && process.platform === "win32") {
+  configureWindowsProfile(app);
+} else if (app.isPackaged) {
+  app.setPath("userData", path.join(path.dirname(process.execPath), "nullpoint-data"));
+}
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;

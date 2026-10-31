@@ -4,6 +4,8 @@
 
 这是一项非官方社区开发，与 Sony 和 Nullpoint 原作者无官方关联。保留上游 Apache-2.0 许可证及 [NOTICE](NOTICE) 中的第三方协议研究和许可声明。详见[中文使用说明](README.zh-CN.md)。
 
+**[下载中文版 Windows 安装包](https://github.com/jint-z/nullpoint-zh/releases/latest)** · [安装与配置迁移说明](README.zh-CN.md#windows-安装版)
+
 WH-1000XM6 的降噪、环境音和关闭模式曾由用户测试可用，也观察到偶发高延迟；其他功能的结果取决于实际设备和固件。源码仓库不包含便携版或已签名发行包。上游说明中提及的下载链接属于原项目，不是本仓库的发行版。
 
 ---

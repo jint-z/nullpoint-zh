@@ -7,6 +7,13 @@ import { contextBridge, ipcRenderer } from "electron";
  */
 contextBridge.exposeInMainWorld("nullpoint", {
   isDesktop: true,
+  onSerialPorts: (cb: (value: unknown) => void) => {
+    const listener = (_event: unknown, value: unknown) => cb(value);
+    ipcRenderer.on("nullpoint:serial-ports", listener);
+    return () => ipcRenderer.removeListener("nullpoint:serial-ports", listener);
+  },
+  selectSerialPort: (requestId: number, portId: string) => ipcRenderer.send("nullpoint:serial-select", requestId, portId),
+  cancelSerialPort: (requestId: number | null) => ipcRenderer.send("nullpoint:serial-cancel", requestId),
   getSettings: () => ipcRenderer.invoke("nullpoint:get-settings"),
   setSettings: (patch: unknown) => ipcRenderer.invoke("nullpoint:set-settings", patch),
   /** Mirrors connection state to the main process so the tray can show and change the mode. */

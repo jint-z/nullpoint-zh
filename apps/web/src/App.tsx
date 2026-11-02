@@ -11,7 +11,7 @@ import { Settings } from "./screens/Settings.js";
 
 export function App() {
   const { settings, update, isDesktop } = useSettings();
-  const { connection, deviceState, controlLost, connect, reconnectKnown, grantedPorts, reset, headphones } =
+  const { connection, deviceState, controlLost, connect, choosePort, grantedPorts, reset, headphones, selection, selectPort } =
     useHeadphones({ autoReconnect: settings.reconnectAutomatically });
   const [showSettings, setShowSettings] = useState(false);
 
@@ -41,10 +41,10 @@ export function App() {
   const lockedStc = settings.lockedSettings.speakToChat;
   const liveStc = deviceState?.speakToChat;
   useEffect(() => {
-    if (lockedStc === undefined || !liveStc || !headphones) return;
+    if (deviceState?.speakToChatLoading || lockedStc === undefined || !liveStc || !headphones) return;
     if (liveStc.enabled === lockedStc) return;
     void headphones.setSpeakToChat({ ...liveStc, enabled: lockedStc });
-  }, [lockedStc, liveStc, headphones]);
+  }, [lockedStc, liveStc, headphones, deviceState?.speakToChatLoading]);
 
   // Mirror the essentials to the tray, so the menu can show battery and the current mode and
   // change it without the window ever opening.
@@ -92,20 +92,19 @@ export function App() {
 
   switch (connection.status) {
     case "unsupported":
-      return <UnsupportedBrowser />;
+      return <UnsupportedBrowser onSettingsClick={() => setShowSettings(true)} />;
     case "idle":
       return (
         <ConnectIdle
           onConnect={connect}
-          onReconnect={reconnectKnown}
-          knownDevices={settings.knownDevices}
-          grantedPorts={grantedPorts}
+          preparing={grantedPorts === null}
+          onSettingsClick={() => setShowSettings(true)}
         />
       );
     case "connecting":
-      return <Connecting onCancel={reset} />;
+      return <Connecting onCancel={reset} onSettingsClick={() => setShowSettings(true)} selection={selection} onSelect={selectPort} />;
     case "failed":
-      return <ConnectFailed message={connection.message} onRetry={connect} onChooseAnother={reset} />;
+      return <ConnectFailed message={connection.message} onRetry={connect} onChooseAnother={choosePort} onSettingsClick={() => setShowSettings(true)} />;
     case "connected":
     case "reconnecting":
       // Keep showing the dashboard with the last-known state while reconnecting (design §5.3
@@ -143,7 +142,7 @@ export function App() {
           onCancelReconnect={reset}
         />
       ) : (
-        <Connecting onCancel={reset} />
+        <Connecting onCancel={reset} onSettingsClick={() => setShowSettings(true)} selection={selection} onSelect={selectPort} />
       );
   }
 }

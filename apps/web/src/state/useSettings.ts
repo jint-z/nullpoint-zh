@@ -93,6 +93,9 @@ export function customEqKey(model: string | null | undefined, layout: string): s
 
 interface NullpointBridge {
   isDesktop: true;
+  onSerialPorts(cb: (value: { requestId: number; ports: Array<{ id: string; name: string }> }) => void): () => void;
+  selectSerialPort(requestId: number, portId: string): void;
+  cancelSerialPort(requestId: number | null): void;
   getSettings(): Promise<AppSettings>;
   setSettings(patch: Partial<AppSettings>): Promise<AppSettings>;
   onSettingsChanged(cb: (settings: AppSettings) => void): () => void;
@@ -115,8 +118,9 @@ const STORAGE_KEY = "nullpoint.settings";
 function loadLocal(): AppSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...DEFAULT_SETTINGS };
-    return { ...DEFAULT_SETTINGS, ...(JSON.parse(raw) as Partial<AppSettings>) };
+    const legacyLanguage = localStorage.getItem("nullpoint.language") === "en" ? "en" : "zh-CN";
+    if (!raw) return { ...DEFAULT_SETTINGS, language: legacyLanguage };
+    return { ...DEFAULT_SETTINGS, language: legacyLanguage, ...(JSON.parse(raw) as Partial<AppSettings>) };
   } catch {
     return { ...DEFAULT_SETTINGS };
   }
@@ -209,8 +213,10 @@ export function useSettings() {
       if (bridge) {
         const value = await bridge.setSettings(patch);
         setSettings({ ...DEFAULT_SETTINGS, ...value, lockedSettings: value.lockedSettings ?? {} });
+        if (patch.language) window.dispatchEvent(new CustomEvent("nullpoint-language", { detail: patch.language }));
         return;
       }
+      if (patch.language) window.dispatchEvent(new CustomEvent("nullpoint-language", { detail: patch.language }));
       setSettings((current) => {
         const next = { ...current, ...patch };
         try {

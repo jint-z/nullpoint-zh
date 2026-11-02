@@ -1,6 +1,6 @@
 {
   "name": "@ssc/desktop",
-  "version": "1.2.0",
+  "version": "1.2.6",
   "private": true,
   "description": "Nullpoint desktop app (Electron) — tray resident, Windows and macOS",
   "license": "Apache-2.0",

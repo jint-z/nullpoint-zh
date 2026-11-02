@@ -19,6 +19,7 @@ export function ProtocolInspector({ headphones }: { headphones: Headphones | nul
   useEffect(() => {
     if (!headphones) return;
     setRecording(headphones.trace.enabled);
+    setFrames([...headphones.trace.list()]);
     return headphones.trace.onChange(() => {
       setFrames([...headphones.trace.list()]);
       setRecording(headphones.trace.enabled);
@@ -157,6 +158,7 @@ export function ProtocolInspector({ headphones }: { headphones: Headphones | nul
               <span style={{ flex: "none", width: 62, textAlign: "right", color: "var(--fg3)" }}>
                 {tr(f.at)}{tr("ms")}</span>
               <span style={{ flex: "none", width: 22 }}>{tr(f.direction === "tx" ? "→" : "←")}</span>
+              <span style={{ flex: "none", width: 44, color: "var(--fg3)" }}>#{f.seq}</span>
               <span style={{ flex: "none", width: 190, overflow: "hidden", textOverflow: "ellipsis" }}>
                 {tr(f.label)}
               </span>

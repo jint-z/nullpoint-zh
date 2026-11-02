@@ -5,14 +5,12 @@ import {
   DetectSensitivity,
   ModeOutTime,
   PriorMode,
-  RoomSize,
-  UpmixItem,
   UpscalingTypeAutoOff,
-  type BgmModeState,
   type SpeakToChatState,
 } from "@ssc/core";
 import { Switch } from "./Switch.js";
 import { Collapse } from "./Collapse.js";
+import { Segmented } from "./Segmented.js";
 
 /**
  * The capability-gated extras: connection quality, DSEE upscaling and Speak-to-Chat.
@@ -44,59 +42,15 @@ function Row({ label, hint, children }: { label: string; hint: string; children:
   );
 }
 
-function Segmented<T extends number>({
-  value,
-  options,
-  onChange,
-  ariaLabel,
-}: {
-  value: T;
-  options: Array<{ value: T; label: string }>;
-  onChange: (value: T) => void;
-  ariaLabel: string;
-}) {
-  return (
-    <div role="radiogroup" aria-label={tr(ariaLabel)} style={{ display: "flex", gap: 5 }}>
-      {tr(options.map((option) => {
-        const selected = value === option.value;
-        return (
-          <button
-            key={option.value}
-            role="radio"
-            aria-checked={selected}
-            onClick={() => onChange(option.value)}
-            className="mono"
-            style={{
-              fontWeight: 500,
-              fontSize: 9.5,
-              letterSpacing: "0.08em",
-              padding: "6px 9px",
-              borderRadius: 6,
-              cursor: "pointer",
-              whiteSpace: "nowrap",
-              color: selected ? "var(--bg)" : "var(--fg3)",
-              background: selected ? "var(--accent)" : "none",
-              border: `1px solid ${selected ? "var(--accent)" : "var(--line)"}`,
-            }}
-          >
-            {tr(option.label)}
-          </button>
-        );
-      }))}
-    </div>
-  );
-}
-
 export function SoundSettings({
+  modelName,
   connectionMode,
   upscaling,
   speakToChat,
   pauseOnRemoval,
   headGesture,
   autoPowerOff,
-  bgmMode,
-  upmixCinema,
-  upmixSeries,
+  autoPowerOffWrite,
   onConnectionModeChange,
   onUpscalingChange,
   onSpeakToChatChange,
@@ -105,19 +59,15 @@ export function SoundSettings({
   onPauseOnRemovalChange,
   onHeadGestureChange,
   onAutoPowerOffChange,
-  onBgmModeChange,
-  onUpmixCinemaChange,
-  onUpmixSeriesChange,
 }: {
+  modelName: string | null;
   connectionMode: PriorMode | null;
   upscaling: UpscalingTypeAutoOff | null;
   speakToChat: SpeakToChatState | null;
   pauseOnRemoval: boolean | null;
   headGesture: boolean | null;
   autoPowerOff: AutoPowerOff | null;
-  bgmMode: BgmModeState | null;
-  upmixCinema: boolean | null;
-  upmixSeries: UpmixItem | null;
+  autoPowerOffWrite: "idle" | "pending" | "unconfirmed" | "rejected";
   onConnectionModeChange: (mode: PriorMode) => void;
   onUpscalingChange: (value: UpscalingTypeAutoOff) => void;
   onSpeakToChatChange: (next: SpeakToChatState) => void;
@@ -128,20 +78,22 @@ export function SoundSettings({
   onPauseOnRemovalChange: (enabled: boolean) => void;
   onHeadGestureChange: (enabled: boolean) => void;
   onAutoPowerOffChange: (value: AutoPowerOff) => void;
-  onBgmModeChange: (next: BgmModeState) => void;
-  onUpmixCinemaChange: (enabled: boolean) => void;
-  onUpmixSeriesChange: (item: UpmixItem) => void;
 }) {
-  const anything =
-    connectionMode !== null ||
-    upscaling !== null ||
-    speakToChat !== null ||
-    pauseOnRemoval !== null ||
-    headGesture !== null ||
-    autoPowerOff !== null ||
-    bgmMode !== null ||
-    upmixCinema !== null ||
-    upmixSeries !== null;
+  const isXm6 = modelName?.trim().toUpperCase() === "WH-1000XM6";
+  const powerOptions = isXm6
+    ? [
+        { value: AutoPowerOff.WHEN_REMOVED, label: "AFTER REMOVAL" },
+        { value: AutoPowerOff.DISABLED, label: "DO NOT TURN OFF" },
+      ]
+    : [
+        { value: AutoPowerOff.AFTER_5_MIN, label: "5 MIN" },
+        { value: AutoPowerOff.AFTER_30_MIN, label: "30 MIN" },
+        { value: AutoPowerOff.AFTER_180_MIN, label: "3 HR" },
+        { value: AutoPowerOff.WHEN_REMOVED, label: "WHEN OFF EARS" },
+        { value: AutoPowerOff.DISABLED, label: "NEVER" },
+      ];
+  const anything = speakToChat !== null || pauseOnRemoval !== null || autoPowerOff !== null ||
+    connectionMode !== null || upscaling !== null || headGesture !== null;
   if (!anything) return null;
 
   return (
@@ -160,7 +112,7 @@ export function SoundSettings({
         className="mono"
         style={{ fontWeight: 600, fontSize: 11, letterSpacing: "0.14em", color: "var(--fg3)", height: 16 }}
       >
-        {tr("SOUND & SPEECH")}</div>
+        {tr("MORE SOUND SETTINGS")}</div>
 
       {tr(connectionMode !== null && (
         <Row label="Connection quality" hint="Bitrate against link stability">
@@ -187,54 +139,6 @@ export function SoundSettings({
         </Row>
       ))}
 
-      {tr(bgmMode && (
-        <>
-          <Row label="Background music" hint="Places the music around you, not in your head">
-            <Switch
-              checked={bgmMode.enabled}
-              onChange={(enabled) => onBgmModeChange({ ...bgmMode, enabled })}
-              ariaLabel="Background music"
-            />
-          </Row>
-          <Collapse open={bgmMode.enabled} parentGap={16}>
-            <Row label="Room size" hint="How far away it sounds">
-              <Segmented
-                ariaLabel="Room size"
-                value={bgmMode.room}
-                onChange={(room) => onBgmModeChange({ ...bgmMode, room })}
-                options={[
-                  { value: RoomSize.SMALL, label: "SMALL" },
-                  { value: RoomSize.MIDDLE, label: "MEDIUM" },
-                  { value: RoomSize.LARGE, label: "LARGE" },
-                ]}
-              />
-            </Row>
-          </Collapse>
-        </>
-      ))}
-
-      {tr(upmixCinema !== null && (
-        <Row label="Cinema upmix" hint="Widens a stereo mix for film soundtracks">
-          <Switch checked={upmixCinema} onChange={onUpmixCinemaChange} ariaLabel="Cinema upmix" />
-        </Row>
-      ))}
-
-      {tr(upmixSeries !== null && (
-        <Row label="Spatial upmix" hint="Spreads a stereo mix out around you">
-          <Segmented
-            ariaLabel="Spatial upmix"
-            value={upmixSeries}
-            onChange={onUpmixSeriesChange}
-            options={[
-              { value: UpmixItem.NONE, label: "OFF" },
-              { value: UpmixItem.MUSIC, label: "MUSIC" },
-              { value: UpmixItem.CINEMA, label: "CINEMA" },
-              { value: UpmixItem.GAME, label: "GAME" },
-            ]}
-          />
-        </Row>
-      ))}
-
       {tr(pauseOnRemoval !== null && (
         <Row label="Pause when removed" hint="Stops playback when you take them off">
           <Switch checked={pauseOnRemoval} onChange={onPauseOnRemovalChange} ariaLabel="Pause when removed" />
@@ -248,19 +152,22 @@ export function SoundSettings({
       ))}
 
       {tr(autoPowerOff !== null && (
-        <Row label="Switch off when idle" hint="Saves battery when you walk away">
+        <Row label={isXm6 ? "Automatic power off" : "Switch off when idle"} hint={isXm6 ? "When enabled, turns off about 15 minutes after removal" : "Saves battery when you walk away"}>
+          <div>
           <Segmented
-            ariaLabel="Switch off when idle"
+            ariaLabel={isXm6 ? "Automatic power off" : "Switch off when idle"}
             value={autoPowerOff}
             onChange={onAutoPowerOffChange}
-            options={[
-              { value: AutoPowerOff.AFTER_5_MIN, label: "5 MIN" },
-              { value: AutoPowerOff.AFTER_30_MIN, label: "30 MIN" },
-              { value: AutoPowerOff.AFTER_180_MIN, label: "3 HR" },
-              { value: AutoPowerOff.WHEN_REMOVED, label: "WHEN OFF EARS" },
-              { value: AutoPowerOff.DISABLED, label: "NEVER" },
-            ]}
+            options={powerOptions}
+            disabled={autoPowerOffWrite === "pending"}
           />
+          {!powerOptions.some((option) => option.value === autoPowerOff) && (
+            <div role="status">{tr("Headphones reported a different auto power off state")}: 0x{autoPowerOff.toString(16).padStart(2, "0")}</div>
+          )}
+          {autoPowerOffWrite === "pending" && <div role="status">{tr("Checking headphone setting…")}</div>}
+          {autoPowerOffWrite === "unconfirmed" && <div role="alert">{tr("Could not confirm the setting with the headphones.")}</div>}
+          {autoPowerOffWrite === "rejected" && <div role="alert">{tr("Headphones did not accept the requested setting.")}</div>}
+          </div>
         </Row>
       ))}
 

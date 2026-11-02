@@ -108,6 +108,7 @@ function BandSlider({
 }
 
 export function EqualizerPanel({
+  section = "all",
   preset,
   bands,
   profiles,
@@ -117,6 +118,7 @@ export function EqualizerPanel({
   onSaveProfile,
   onDeleteProfile,
 }: {
+  section?: "all" | "presets" | "details";
   preset: EqPresetId;
   bands: EqBands | null;
   profiles: EqProfile[];
@@ -135,15 +137,15 @@ export function EqualizerPanel({
     <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 15, border: "1px solid var(--line)", borderRadius: 12, background: "var(--panel)", minWidth: 0 }}>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: 16, gap: 10 }}>
         <div className="mono" style={{ fontWeight: 600, fontSize: 11, letterSpacing: "0.14em", color: "var(--fg3)" }}>
-          {tr("EQUALIZER")}</div>
+          {tr(section === "details" ? "EQUALIZER CURVE" : "EQUALIZER")}</div>
         <div className="mono" style={{ fontSize: 10, color: "var(--fg3)", textAlign: "right" }}>
-          {tr(editable
+          {section !== "presets" && tr(editable
             ? `DRAG OR ARROW KEYS · ${spec?.min}…+${spec?.max} dB`
             : "PRESET — SELECT CUSTOM TO EDIT")}
         </div>
       </div>
 
-      <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+      {section !== "details" && <div className="eq-presets" style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
         {tr(PRESETS.map((p) => {
           const on = preset === p.id;
           return (
@@ -177,9 +179,9 @@ export function EqualizerPanel({
             </div>
           );
         }))}
-      </div>
+      </div>}
 
-      {tr(bands && spec ? (
+      {section !== "presets" && tr(bands && spec ? (
         <div
           style={{
             flex: 1,
@@ -212,13 +214,13 @@ export function EqualizerPanel({
           {tr("THIS PRESET HAS NO ADJUSTABLE BANDS")}</div>
       ))}
 
-      <EqProfiles
+      {section !== "presets" && <EqProfiles
         profiles={profiles}
         current={bands}
         onApply={onApplyProfile}
         onSave={onSaveProfile}
         onDelete={onDeleteProfile}
-      />
+      />}
     </div>
   );
 }

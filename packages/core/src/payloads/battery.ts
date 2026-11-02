@@ -51,7 +51,9 @@ export function encodeSetAutoPowerOff(value: AutoPowerOff): Uint8Array {
 /** Null when the frame is about some other power parameter. */
 export function decodeAutoPowerOff(payload: Uint8Array): AutoPowerOff | null {
   if (payload[1] !== PowerInquiredType.AUTO_POWER_OFF_WEARING_DETECTION) return null;
-  if (payload[2] === undefined) return null;
+  // This parameter contains both the current and last-selected fields. A truncated reply is
+  // not sufficient evidence that the headset accepted a write.
+  if (payload.length < 4) return null;
   return payload[2] as AutoPowerOff;
 }
 

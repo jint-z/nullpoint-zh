@@ -1,5 +1,5 @@
 appId: io.github.jint-z.nullpoint-zh
-productName: Nullpoint 中文版
+productName: Nullpoint
 copyright: Copyright © 2026 Nullpoint contributors. Not affiliated with Sony Group Corporation.
 
 directories:
@@ -33,13 +33,14 @@ win:
   icon: build/icon.ico
 
 nsis:
+  include: build/upgrade-installer.nsh
   artifactName: Nullpoint-zh-Setup-${version}-${arch}.${ext}
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: Nullpoint 中文版
+  shortcutName: Nullpoint
   # Artwork is generated, not drawn by hand — see scripts/make-installer-art.cjs. The wave from
   # the app icon runs down the sidebar and settles flat; the uninstaller runs it back in amber.
   installerHeader: build/installerHeader.bmp

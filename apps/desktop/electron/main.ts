@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, net, protocol, session } from "electron";
+import { app, BrowserWindow, Menu, Tray, globalShortcut, ipcMain, nativeImage, nativeTheme, net, protocol, session } from "electron";
 import path from "node:path";
 import { configureWindowsProfile } from "./profile.js";
 import translations from "./translations.json";
@@ -65,20 +65,30 @@ function registerAppProtocol(): void {
   });
 }
 
-/**
- * Heuristic auto-select for the Sony RFCOMM port. Unlike the web app's `requestPort({filters})`
- * (PLAN.md §4.1), Electron's `select-serial-port` event does not expose the Bluetooth service
- * class UUID — ports are Bluetooth Classic devices with no vendor/product ID, so we can only
- * match on display name. Falls back to the sole port if there's exactly one, which covers the
- * common case of a single paired headset.
- */
-function pickSonyPort(ports: Electron.SerialPort[]): Electron.SerialPort | undefined {
-  const byName = ports.find((p) => /wh-1000x|wf-1000x|sony/i.test(p.displayName ?? ""));
-  if (byName) return byName;
-  // The renderer already constrained requestPort to Sony's SPP service class, so anything
-  // Electron offers here advertises that service — falling back to the first is safe, and
-  // better than cancelling (preventDefault means there is no built-in chooser to fall back to).
-  return ports[0];
+let serialRequestId = 0;
+let serialSelection: { id: number; owner: Electron.WebContents; ports: Map<string, Electron.SerialPort>; callback: (portId: string) => void } | null = null;
+
+function publishSerialPorts(): void {
+  const current = serialSelection;
+  if (!current || current.owner.isDestroyed()) return;
+  current.owner.send("nullpoint:serial-ports", {
+    requestId: current.id,
+    ports: [...current.ports.values()].map((port) => ({ id: port.portId, name: port.displayName || "" })),
+  });
+}
+
+function finishSerialSelection(portId = ""): void {
+  const current = serialSelection;
+  if (!current) return;
+  serialSelection = null;
+  current.callback(portId);
+}
+
+function applyTitleBarTheme(): void {
+  if (process.platform !== "win32" || !mainWindow || mainWindow.isDestroyed()) return;
+  const theme = readSettings().theme;
+  const dark = theme === "dark" || (theme === "system" && nativeTheme.shouldUseDarkColors);
+  mainWindow.setTitleBarOverlay({ color: dark ? "#252729" : "#eceeec", symbolColor: dark ? "#f4f5f6" : "#202326", height: 48 });
 }
 
 /** True when this launch came from the OS login item (or the user passed --hidden). */
@@ -96,6 +106,11 @@ function createWindow(show: boolean): BrowserWindow {
     minHeight: 560,
     title: "Nullpoint",
     show,
+    ...(process.platform === "win32" ? {
+      titleBarStyle: "hidden" as const,
+      titleBarOverlay: { color: "#252729", symbolColor: "#f4f5f6", height: 48 },
+      autoHideMenuBar: true,
+    } : {}),
     // Avoid a white flash before the dark UI paints.
     backgroundColor: "#0b0c0e",
     // Windows/Linux read the window icon from here; macOS uses the bundle icon.
@@ -106,6 +121,24 @@ function createWindow(show: boolean): BrowserWindow {
     },
   });
 
+  // The Windows overlay hides the menu bar. An unmodified Alt opens the original native menu
+  // below the title bar; shortcuts such as Alt+F4 continue through to the operating system.
+  if (process.platform === "win32") {
+    let altAlone = false;
+    win.webContents.on("before-input-event", (event, input) => {
+      if (input.type === "keyDown") {
+        if (input.key === "Alt") altAlone = true;
+        else if (altAlone) altAlone = false;
+      } else if (input.type === "keyUp" && input.key === "Alt") {
+        if (altAlone) {
+          event.preventDefault();
+          Menu.getApplicationMenu()?.popup({ window: win, x: 0, y: 48 });
+        }
+        altAlone = false;
+      }
+    });
+  }
+
   if (isDev) {
     void win.loadURL(DEV_SERVER_URL);
   } else {
@@ -113,6 +146,7 @@ function createWindow(show: boolean): BrowserWindow {
   }
 
   win.on("close", (event) => {
+    if (serialSelection?.owner === win.webContents) finishSerialSelection();
     // Keep running in the tray unless the user actually chose Quit.
     if (!isQuitting && readSettings().closeToTray) {
       event.preventDefault();
@@ -135,6 +169,7 @@ function createWindow(show: boolean): BrowserWindow {
 function showWindow(): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
     mainWindow = createWindow(true);
+    applyTitleBarTheme();
     return;
   }
   if (mainWindow.isMinimized()) mainWindow.restore();
@@ -323,16 +358,31 @@ if (!app.requestSingleInstanceLock()) {
     // Without this, a port chosen below is still refused when the renderer tries to open it.
     session.defaultSession.setDevicePermissionHandler((details) => details.deviceType === "serial");
 
-    session.defaultSession.on("select-serial-port", (event, portList, _webContents, callback) => {
+    session.defaultSession.on("select-serial-port", (event, portList, webContents, callback) => {
       event.preventDefault();
-      const chosen = pickSonyPort(portList);
-      // Logged because an empty list is the single most useful clue when a headset will not
-      // connect: it means the OS is not exposing Sony's RFCOMM service to Chromium at all.
-      console.log(
-        `[nullpoint] serial ports offered: ${portList.length}`,
-        portList.map((p) => p.displayName ?? p.portId)
-      );
-      callback(chosen ? chosen.portId : "");
+      if (webContents !== mainWindow?.webContents) { callback(""); return; }
+      finishSerialSelection();
+      serialSelection = { id: ++serialRequestId, owner: webContents, ports: new Map(portList.map((p) => [p.portId, p])), callback };
+      publishSerialPorts();
+    });
+    session.defaultSession.on("serial-port-added", (_event, port, webContents) => {
+      if (serialSelection?.owner !== webContents) return;
+      serialSelection.ports.set(port.portId, port);
+      publishSerialPorts();
+    });
+    session.defaultSession.on("serial-port-removed", (_event, port, webContents) => {
+      if (serialSelection?.owner !== webContents) return;
+      serialSelection.ports.delete(port.portId);
+      publishSerialPorts();
+    });
+    ipcMain.on("nullpoint:serial-select", (event, requestId: unknown, portId: unknown) => {
+      const current = serialSelection;
+      if (!current || current.owner !== event.sender || current.id !== requestId || typeof portId !== "string" || !current.ports.has(portId)) return;
+      finishSerialSelection(portId);
+    });
+    ipcMain.on("nullpoint:serial-cancel", (event, requestId: unknown) => {
+      const current = serialSelection;
+      if (current && current.owner === event.sender && (requestId === current.id || requestId === null)) finishSerialSelection();
     });
 
     // Keep the OS login item in sync with the stored setting, in case it was changed elsewhere.
@@ -350,6 +400,7 @@ if (!app.requestSingleInstanceLock()) {
       if (patch.launchAtLogin !== undefined) applyLoginItemSetting(patch.launchAtLogin);
       refreshTrayMenu();
       refreshApplicationMenu();
+      applyTitleBarTheme();
       return next;
     });
 
@@ -359,6 +410,8 @@ if (!app.requestSingleInstanceLock()) {
 
     const startHidden = shouldStartHidden() || settings.startMinimized;
     mainWindow = createWindow(!startHidden);
+    applyTitleBarTheme();
+    nativeTheme.on("updated", applyTitleBarTheme);
     syncMacDockVisibility();
 
     app.on("activate", () => {
@@ -370,6 +423,7 @@ if (!app.requestSingleInstanceLock()) {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  finishSerialSelection();
 });
 
 // Deliberately no "window-all-closed" quit: Nullpoint keeps running in the tray so it can

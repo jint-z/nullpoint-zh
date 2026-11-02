@@ -18,9 +18,17 @@ export function tr<T>(value: T): T {
 }
 export function LocaleRoot({ children }: { children: ReactElement }) {
   const [language, setLanguage] = useState<Language>(() => {
-    try { return localStorage.getItem("nullpoint.language") === "en" ? "en" : "zh-CN"; } catch { return "zh-CN"; }
+    try {
+      const settings = JSON.parse(localStorage.getItem("nullpoint.settings") ?? "{}");
+      return (settings.language ?? localStorage.getItem("nullpoint.language")) === "en" ? "en" : "zh-CN";
+    } catch { return "zh-CN"; }
   });
   setCurrentLanguage(language);
+  useEffect(() => {
+    const changed = (event: Event) => setLanguage((event as CustomEvent<Language>).detail);
+    window.addEventListener("nullpoint-language", changed);
+    return () => window.removeEventListener("nullpoint-language", changed);
+  }, []);
   useEffect(() => {
     document.documentElement.lang = language;
     document.title = language === "zh-CN" ? "Nullpoint — 索尼耳机控制" : "Nullpoint — desktop and web control for Sony headphones";
@@ -32,10 +40,5 @@ export function LocaleRoot({ children }: { children: ReactElement }) {
     void bridge.getSettings().then((settings) => setLanguage(settings.language === "en" ? "en" : "zh-CN"));
     return bridge.onSettingsChanged((settings) => setLanguage(settings.language === "en" ? "en" : "zh-CN"));
   }, []);
-  async function switchLanguage() {
-    const next: Language = language === "zh-CN" ? "en" : "zh-CN";
-    setLanguage(next);
-    if (window.nullpoint) await window.nullpoint.setSettings({ language: next });
-  }
-  return <><button type="button" onClick={() => void switchLanguage()} aria-label={language === "zh-CN" ? "Switch language to English" : "切换语言为中文"} style={{ position: "fixed", zIndex: 1000, right: 16, bottom: 16, padding: "7px 10px", border: "1px solid var(--line)", borderRadius: 8, background: "var(--panel)", color: "var(--fg)", cursor: "pointer" }}>{language === "zh-CN" ? "EN" : "中文"}</button>{cloneElement(children)}</>;
+  return cloneElement(children);
 }

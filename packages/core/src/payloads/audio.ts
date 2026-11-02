@@ -89,13 +89,15 @@ export function decodeAudioParam(
       return { type: "upscaling", value: value as UpscalingTypeAutoOff };
     case AudioInquiredType.BGM_MODE:
     case AudioInquiredType.BGM_MODE_AND_ERRORCODE: {
-      if (payload[3] === undefined) return null;
+      if ((value !== EnableDisable.ENABLE && value !== EnableDisable.DISABLE) ||
+        (payload[3] !== RoomSize.SMALL && payload[3] !== RoomSize.MIDDLE && payload[3] !== RoomSize.LARGE)) return null;
       return {
         type: "bgmMode",
         value: { enabled: value === EnableDisable.ENABLE, room: payload[3] as RoomSize },
       };
     }
     case AudioInquiredType.UPMIX_CINEMA:
+      if (value !== EnableDisable.ENABLE && value !== EnableDisable.DISABLE) return null;
       return { type: "upmixCinema", value: value === EnableDisable.ENABLE };
     case AudioInquiredType.UPMIX_SERIES:
       return { type: "upmixSeries", value: value as UpmixItem };

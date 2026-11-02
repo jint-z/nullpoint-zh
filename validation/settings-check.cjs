@@ -20,6 +20,9 @@ function read(stored) { return load(stored).settings; }
 const clean=read(null); assert.equal(clean.language,'zh-CN'); assert.deepEqual(Object.keys(clean.lockedSettings),[]);
 const old=read({theme:'dark',knownDevices:['WH-1000XM6']}); assert.equal(old.language,'zh-CN');assert.equal(old.theme,'dark');assert.equal(old.knownDevices[0],'WH-1000XM6');assert.deepEqual(Object.keys(old.lockedSettings),[]);
 const existing=read({language:'en',lockedSettings:{speakToChat:false}});assert.equal(existing.language,'en');assert.equal(existing.lockedSettings.speakToChat,false);
+const previousVersion=read({language:'en',theme:'dark',accent:'teal',reconnectAutomatically:false,customEq:{'WH-1000XM6:graphic10':[1,2,3]},eqProfiles:[{id:'eq-1',name:'Saved',layout:'graphic10',values:[1,2,3]}]});
+assert.equal(previousVersion.language,'en');assert.equal(previousVersion.theme,'dark');assert.equal(previousVersion.accent,'teal');assert.equal(previousVersion.reconnectAutomatically,false);
+assert.deepEqual(Array.from(previousVersion.customEq['WH-1000XM6:graphic10']),[1,2,3]);assert.equal(previousVersion.eqProfiles[0].name,'Saved');assert.deepEqual(Array.from(previousVersion.eqProfiles[0].values),[1,2,3]);
 const windows=load(null);windows.applyLoginItemSetting(true);windows.applyLoginItemSetting(false);
 assert.equal(windows.loginCalls[0].name,'Nullpoint-zh');assert.equal(windows.loginCalls[0].openAtLogin,true);
 assert.equal(windows.loginCalls[1].name,'Nullpoint-zh');assert.equal(windows.loginCalls[1].openAtLogin,false);

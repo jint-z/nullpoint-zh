@@ -8,9 +8,11 @@ import { ConnectIdle } from "../../../apps/web/src/screens/ConnectIdle.js";
 import { ConnectFailed } from "../../../apps/web/src/screens/ConnectFailed.js";
 import { Dashboard } from "../../../apps/web/src/screens/Dashboard.js";
 import { Settings } from "../../../apps/web/src/screens/Settings.js";
+import { SoundSettings } from "../../../apps/web/src/components/SoundSettings.js";
 import { DEFAULT_SETTINGS } from "../../../apps/web/src/state/useSettings.js";
 import { Headphones } from "../src/headphones.js";
 import { LoopbackTransport } from "../src/transport.js";
+import { AutoPowerOff } from "../src/constants.js";
 
 (globalThis as any).__APP_VERSION__ = "1.2.0";
 const noop = () => {};
@@ -22,18 +24,18 @@ function saveSnapshot(name: string, content: string) {
 describe("localised UI with synthetic state", () => {
   it("renders the disconnected screen in Chinese and English", () => {
     setCurrentLanguage("zh-CN");
-    let view = renderToStaticMarkup(React.createElement(ConnectIdle, {onConnect: noop}));
-    expect(view).toContain("未连接耳机");
+    let view = renderToStaticMarkup(React.createElement(ConnectIdle, {onConnect: noop, onSettingsClick: noop, preparing: false}));
+    expect(view).not.toContain("未连接耳机");
     expect(view).toContain("连接耳机");
     saveSnapshot("idle", view);
     setCurrentLanguage("en");
-    view = renderToStaticMarkup(React.createElement(ConnectIdle, {onConnect: noop}));
-    expect(view).toContain("No headphones connected");
+    view = renderToStaticMarkup(React.createElement(ConnectIdle, {onConnect: noop, onSettingsClick: noop, preparing: false}));
+    expect(view).not.toContain("No headphones connected");
     expect(view).toContain("Connect headphones");
     setCurrentLanguage("zh-CN");
   });
   it("translates connection failures without changing their categorisation", () => {
-    const view = renderToStaticMarkup(React.createElement(ConnectFailed, {message:"failed to open",onRetry:noop,onChooseAnother:noop}));
+    const view = renderToStaticMarkup(React.createElement(ConnectFailed, {message:"failed to open",onRetry:noop,onChooseAnother:noop,onSettingsClick:noop}));
     expect(view).toContain("其他程序占用了控制通道");
     expect(view).toContain("重试");
     saveSnapshot("failed", view);
@@ -55,5 +57,32 @@ describe("localised UI with synthetic state", () => {
   it("retains unknown product names and protocol literals", () => {
     expect(tr("WH-1000XM6")).toBe("WH-1000XM6");
     expect(tr("AAC")).toBe("AAC");
+  });
+  it("shows only the two reported XM6 modes and preserves other model options", () => {
+    const props = {
+      modelName: "WH-1000XM6", connectionMode: null, upscaling: null, speakToChat: null,
+      pauseOnRemoval: null, headGesture: null, autoPowerOff: AutoPowerOff.WHEN_REMOVED,
+      autoPowerOffWrite: "idle" as const,
+      onConnectionModeChange: noop, onUpscalingChange: noop, onSpeakToChatChange: noop,
+      onPauseOnRemovalChange: noop, onHeadGestureChange: noop, onAutoPowerOffChange: noop,
+    };
+    const xm6 = renderToStaticMarkup(React.createElement(SoundSettings, props));
+    expect(xm6).toContain("摘下后关机");
+    expect(xm6).toContain("不自动关机");
+    expect(xm6).toContain("开启后，摘下耳机约 15 分钟后关机");
+    expect(xm6).not.toContain(">5 分钟<");
+    expect(xm6).not.toContain(">30 分钟<");
+    const disabled = renderToStaticMarkup(React.createElement(SoundSettings, { ...props, autoPowerOff: AutoPowerOff.DISABLED }));
+    expect(disabled).toContain('aria-checked="true"');
+    expect(disabled).toContain("不自动关机");
+    const unknown = renderToStaticMarkup(React.createElement(SoundSettings, { ...props, autoPowerOff: 0x7f }));
+    expect(unknown).toContain("耳机返回了其他自动关机状态");
+    expect(unknown).toContain("0x7f");
+    expect(unknown).not.toContain('aria-checked="true"');
+    const rejected = renderToStaticMarkup(React.createElement(SoundSettings, { ...props, autoPowerOffWrite: "rejected" }));
+    expect(rejected).toContain("耳机没有接受所选设置");
+    const other = renderToStaticMarkup(React.createElement(SoundSettings, { ...props, modelName: "WH-1000XM5" }));
+    expect(other).toContain("5 分钟");
+    expect(other).toContain("30 分钟");
   });
 });

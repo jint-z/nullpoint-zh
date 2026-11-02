@@ -2,142 +2,22 @@ import { tr } from "../i18n.js";
 import { describeConnectError } from "../state/useHeadphones.js";
 import { TitleBar } from "./TitleBar.js";
 
-/**
- * design/SoundConnect Desktop.dc.html §1b "CONNECTION FAILED".
- * The explanation is derived from the actual error rather than assumed — see
- * describeConnectError — because "nothing in the picker" and "the headset refused" look
- * identical here but need different fixes.
- */
-export function ConnectFailed({
-  message,
-  onRetry,
-  onChooseAnother,
-}: {
-  message: string;
-  onRetry: () => void;
-  onChooseAnother: () => void;
+export function ConnectFailed({ message, onRetry, onChooseAnother, onSettingsClick }: {
+  message: string; onRetry: () => void; onChooseAnother: () => void; onSettingsClick: () => void;
 }) {
   const { headline, hint, steps, detail } = describeConnectError(new Error(message));
-
-  return (
-    <div className="screen" style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
-      <TitleBar statusColor="var(--warn)" />
-      <div
-        className="pad-x"
-        style={{
-          flex: 1,
-          display: "flex",
-          flexDirection: "column",
-          alignItems: "center",
-          justifyContent: "center",
-        }}
-      >
-        <div
-          style={{
-            width: 96,
-            height: 96,
-            borderRadius: 16,
-            border: "1px solid var(--warn-line)",
-            background: "var(--warn-bg)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-          }}
-        >
-          <div style={{ width: 3, height: 44, borderRadius: 2, background: "var(--warn)" }} />
+  return <div className="screen app-shell">
+    <TitleBar onSettingsClick={onSettingsClick} />
+    <main className="status-content">
+      <section className="status-panel error-panel" role="alert">
+        <h1>{tr(headline)}</h1><p>{tr(hint)}</p>
+        {steps && <ol>{steps.map((step) => <li key={step}>{tr(step)}</li>)}</ol>}
+        <p className="error-detail">{detail}</p>
+        <div className="status-actions">
+          <button className="primary-button" onClick={onRetry}>{tr("Try again")}</button>
+          <button className="secondary-button" onClick={onChooseAnother}>{tr("Choose another device")}</button>
         </div>
-        <div style={{ marginTop: 26, fontWeight: 600, fontSize: 22, letterSpacing: "-0.02em", color: "var(--fg)" }}>
-          {tr(headline)}
-        </div>
-        <div
-          style={{
-            marginTop: 12,
-            maxWidth: 460,
-            textAlign: "center",
-            fontSize: 13,
-            lineHeight: 1.6,
-            color: "var(--fg2)",
-          }}
-        >
-          {tr(hint)}
-        </div>
-
-        {/* Ordered by how often each one is the actual cause, so the first thing you read is
-            the first thing worth trying. */}
-        {tr(steps && (
-          <ol
-            style={{
-              marginTop: 18,
-              maxWidth: 460,
-              width: "100%",
-              padding: 0,
-              listStyle: "none",
-              display: "flex",
-              flexDirection: "column",
-              gap: 1,
-              border: "1px solid var(--line)",
-              borderRadius: 10,
-              overflow: "hidden",
-              background: "var(--line)",
-            }}
-          >
-            {tr(steps.map((step, i) => (
-              <li
-                key={step}
-                style={{
-                  display: "flex",
-                  gap: 11,
-                  padding: "11px 14px",
-                  background: "var(--panel)",
-                  fontSize: 12.5,
-                  lineHeight: 1.55,
-                  color: "var(--fg2)",
-                }}
-              >
-                <span className="mono" style={{ flex: "none", color: "var(--fg3)", fontSize: 11 }}>
-                  {tr(i + 1)}
-                </span>
-                <span>{tr(step)}</span>
-              </li>
-            )))}
-          </ol>
-        ))}
-
-        <div
-          className="mono"
-          style={{ marginTop: 14, fontSize: 10.5, color: "var(--fg3)", maxWidth: 520, textAlign: "center" }}
-        >
-          {tr(detail)}
-        </div>
-        <div style={{ marginTop: 26, display: "flex", gap: 10 }}>
-          <button
-            onClick={onRetry}
-            style={{
-              padding: "12px 24px",
-              borderRadius: 9,
-              border: "none",
-              background: "var(--accent)",
-              color: "var(--bg)",
-              fontWeight: 600,
-              fontSize: 13.5,
-            }}
-          >
-            {tr("Try again")}</button>
-          <button
-            onClick={onChooseAnother}
-            style={{
-              padding: "12px 20px",
-              borderRadius: 9,
-              border: "1px solid var(--line)",
-              background: "transparent",
-              color: "var(--fg2)",
-              fontWeight: 500,
-              fontSize: 13.5,
-            }}
-          >
-            {tr("Start over")}</button>
-        </div>
-      </div>
-    </div>
-  );
+      </section>
+    </main>
+  </div>;
 }

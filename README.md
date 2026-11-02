@@ -1,12 +1,12 @@
-# Nullpoint 中文版
+# Nullpoint
 
 本项目基于 [mehrshaad/nullpoint](https://github.com/mehrshaad/nullpoint) 二次开发，以 v1.2.0（提交 `b406e1a494a5e464bcf8f9be183ac7479c470e74`）为基础。主要改动包括简体中文和英文切换、Windows 托盘与菜单汉化、独立便携配置，以及修复干净配置下的启动白屏。
 
 这是一项非官方社区开发，与 Sony 和 Nullpoint 原作者无官方关联。保留上游 Apache-2.0 许可证及 [NOTICE](NOTICE) 中的第三方协议研究和许可声明。详见[中文使用说明](README.zh-CN.md)。
 
-**[下载中文版 Windows 安装包](https://github.com/jint-z/nullpoint-zh/releases/latest)** · [安装与配置迁移说明](README.zh-CN.md#windows-安装版)
+**[Windows 发行版](https://github.com/jint-z/nullpoint-zh/releases)** · [安装与配置迁移说明](README.zh-CN.md#windows-安装版) · [v1.2.6 改进说明](CHANGELOG.md)
 
-WH-1000XM6 的降噪、环境音和关闭模式曾由用户测试可用，也观察到偶发高延迟；其他功能的结果取决于实际设备和固件。源码仓库不包含便携版或已签名发行包。上游说明中提及的下载链接属于原项目，不是本仓库的发行版。
+当前源码为 v1.2.6。WH-1000XM6 上已测试聆听模式与降噪切换，连接仍可能较慢；其他型号和功能取决于实际设备和固件。Windows 发行版的具体版本和签名状态请查看对应 Release。上游说明中提及的下载链接属于原项目，不是本仓库的发行版。
 
 ---
 

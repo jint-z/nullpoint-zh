@@ -113,192 +113,183 @@ function isChannelBusy(err: unknown): boolean {
  * needing a new user gesture, since Web Serial permission persists for a previously picked port.
  */
 export function useHeadphones({ autoReconnect = true }: { autoReconnect?: boolean } = {}) {
-  const [connection, setConnection] = useState<ConnectionStatus>(
-    WebSerialTransport.isSupported() ? { status: "idle" } : { status: "unsupported" }
-  );
+  const supported = WebSerialTransport.isSupported();
+  const [connection, setConnection] = useState<ConnectionStatus>(supported ? { status: "idle" } : { status: "unsupported" });
   const [deviceState, setDeviceState] = useState<HeadphonesState | null>(null);
-  /**
-   * The link is up but the headset is refusing commands — another device (usually a phone on
-   * multipoint) holds the control channel. Distinct from disconnected: nothing to reconnect,
-   * and it clears by itself once the other device lets go.
-   */
   const [controlLost, setControlLost] = useState(false);
+  const [grantedPorts, setGrantedPorts] = useState<SerialPort[] | null>(null);
+  const [selection, setSelection] = useState<{ requestId: number; ports: Array<{ id: string; name: string }> } | null>(null);
   const headphonesRef = useRef<Headphones | null>(null);
-  /** Held so a session being retired can be detached before it is closed. */
   const unsubscribeRef = useRef<(() => void) | null>(null);
+  const generationRef = useRef(0);
+  const inFlightRef = useRef<Promise<HeadphonesState> | null>(null);
+  const cleanupRef = useRef<Promise<void>>(Promise.resolve());
   const attemptReconnectRef = useRef<(port: SerialPort) => void>(() => {});
-  const cancelledRef = useRef(false);
-  // Read through a ref so an in-flight connection picks up a settings change without
-  // needing to be torn down and re-established.
   const autoReconnectRef = useRef(autoReconnect);
   autoReconnectRef.current = autoReconnect;
 
-  const establish = useCallback(async (port: SerialPort): Promise<HeadphonesState> => {
-    // Retire the previous session before starting another. Without this, every reconnect left
-    // an orphaned one behind with its battery poll still running — and each poll is a radio
-    // transmission sharing the air with your music, so a couple of leaked sessions turn into a
-    // periodic audio dropout that looks like a Bluetooth fault.
-    //
-    // Unsubscribe first: closing the transport can surface as a disconnect, and a listener from
-    // a session we are deliberately retiring must not kick off a reconnect for it.
-    const previous = headphonesRef.current;
-    const previousUnsubscribe = unsubscribeRef.current;
-    headphonesRef.current = null;
-    unsubscribeRef.current = null;
-    previousUnsubscribe?.();
-    if (previous) await previous.disconnect().catch(() => undefined);
+  useEffect(() => window.nullpoint?.onSerialPorts((value) => setSelection(value)), []);
+  useEffect(() => {
+    if (!supported || connection.status !== "idle") return;
+    let active = true;
+    setGrantedPorts(null);
+    void WebSerialTransport.grantedPorts().then((ports) => { if (active) setGrantedPorts(ports); });
+    return () => { active = false; };
+  }, [supported, connection.status]);
 
-    const transport = new WebSerialTransport(port);
-    const headphones = new Headphones(transport);
+  // Drain a cancelled handshake before reusing its port. Closing while open() is still pending
+  // alone is insufficient: the open can finish later and leave a live, orphaned transport.
+  const retire = useCallback(() => {
+    const previous = headphonesRef.current;
+    const pending = inFlightRef.current;
+    unsubscribeRef.current?.();
+    unsubscribeRef.current = null;
+    headphonesRef.current = null;
+    inFlightRef.current = null;
+    if (previous) {
+      cleanupRef.current = cleanupRef.current.then(async () => {
+        await previous.disconnect().catch(() => undefined);
+        if (pending) await pending.catch(() => undefined);
+        await previous.disconnect().catch(() => undefined);
+      });
+    }
+  }, []);
+
+  const establish = useCallback(async (port: SerialPort, generation: number): Promise<HeadphonesState> => {
+    retire();
+    await cleanupRef.current;
+    if (generation !== generationRef.current) throw new Error("Connection cancelled");
+    const headphones = new Headphones(new WebSerialTransport(port));
     headphonesRef.current = headphones;
-    // Reconnecting produces a new session, so any earlier loss of control no longer applies.
+    let linked = false;
     setControlLost(false);
     unsubscribeRef.current = headphones.on((event) => {
+      if (generation !== generationRef.current || headphonesRef.current !== headphones) return;
       setDeviceState({ ...headphones.state });
       if (event.type === "controlLost") setControlLost(true);
       if (event.type === "controlRegained") setControlLost(false);
-      if (event.type !== "disconnected") return;
-      if (autoReconnectRef.current) {
-        attemptReconnectRef.current(port);
-      } else {
-        setConnection({ status: "failed", message: "The headphones disconnected." });
-      }
+      if (event.type !== "disconnected" || !linked) return;
+      if (autoReconnectRef.current) attemptReconnectRef.current(port);
+      else setConnection({ status: "failed", message: "The headphones disconnected." });
     });
-    return headphones.connect();
-  }, []);
-
-  const attemptReconnect = useCallback(
-    async (port: SerialPort) => {
-      cancelledRef.current = false;
-      let reason: "busy" | "gone" = "gone";
-      let delay = RECONNECT_BASE_MS;
-      let busyAttempts = 0;
-      setConnection({ status: "reconnecting", reason });
-
-      while (!cancelledRef.current) {
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        if (cancelledRef.current) return; // user hit Cancel — abandon the retry loop
-        try {
-          const state = await establish(port);
-          if (cancelledRef.current) return;
-          setDeviceState(state);
-          setConnection({ status: "connected" });
-          return;
-        } catch (err) {
-          const next: "busy" | "gone" = isChannelBusy(err) ? "busy" : "gone";
-          // Start over on the delay whenever the situation changes — a headset that just came
-          // back should not inherit the long wait from when it was missing.
-          if (next !== reason) {
-            delay = RECONNECT_BASE_MS;
-            busyAttempts = 0;
-          }
-          reason = next;
-          setConnection({ status: "reconnecting", reason });
-          // The two cases want opposite behaviour. "Gone" means nothing is listening, so back
-          // off; retrying quickly at a headset that is switched off just burns battery. "Busy"
-          // means it is right there and something else is holding the channel — a race you win
-          // by asking often.
-          //
-          // But only for a while. Every attempt is a connection on the same radio carrying the
-          // audio, and a successful one is a forty-frame handshake, so racing a phone that has
-          // held the channel for minutes puts a burst on the air every couple of seconds for as
-          // long as it holds — heard as music breaking up at no particular interval. Race hard
-          // enough to win the blips, then settle down and wait it out.
-          if (reason === "busy") {
-            busyAttempts += 1;
-            delay =
-              busyAttempts <= BUSY_RACE_ATTEMPTS
-                ? Math.min(Math.round(delay * 1.25), RECONNECT_BUSY_MAX_MS)
-                : Math.min(Math.round(delay * 1.6), RECONNECT_BUSY_CALM_MS);
-          } else {
-            delay = Math.min(Math.round(delay * 1.6), RECONNECT_MAX_MS);
-          }
-        }
+    const pending = headphones.connect();
+    inFlightRef.current = pending;
+    try {
+      const state = await pending;
+      if (generation !== generationRef.current) throw new Error("Connection cancelled");
+      linked = true;
+      return state;
+    } catch (error) {
+      if (headphonesRef.current === headphones) {
+        unsubscribeRef.current?.();
+        unsubscribeRef.current = null;
+        headphonesRef.current = null;
       }
-    },
-    [establish]
-  );
+      await headphones.disconnect().catch(() => undefined);
+      throw error;
+    } finally {
+      if (inFlightRef.current === pending) inFlightRef.current = null;
+    }
+  }, [retire]);
 
-  useEffect(() => {
-    attemptReconnectRef.current = attemptReconnect;
-  }, [attemptReconnect]);
+  const attemptReconnect = useCallback(async (port: SerialPort) => {
+    const generation = ++generationRef.current;
+    let reason: "busy" | "gone" = "gone";
+    let delay = RECONNECT_BASE_MS;
+    let busyAttempts = 0;
+    setConnection({ status: "reconnecting", reason });
+    while (generation === generationRef.current) {
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      if (generation !== generationRef.current) return;
+      try {
+        const state = await establish(port, generation);
+        if (generation !== generationRef.current) return;
+        setDeviceState(state);
+        setConnection({ status: "connected" });
+        return;
+      } catch (error) {
+        if (generation !== generationRef.current) return;
+        const next = isChannelBusy(error) ? "busy" : "gone";
+        if (next !== reason) { delay = RECONNECT_BASE_MS; busyAttempts = 0; }
+        reason = next;
+        setConnection({ status: "reconnecting", reason });
+        if (reason === "busy") {
+          busyAttempts += 1;
+          delay = busyAttempts <= BUSY_RACE_ATTEMPTS
+            ? Math.min(Math.round(delay * 1.25), RECONNECT_BUSY_MAX_MS)
+            : Math.min(Math.round(delay * 1.6), RECONNECT_BUSY_CALM_MS);
+        } else delay = Math.min(Math.round(delay * 1.6), RECONNECT_MAX_MS);
+      }
+    }
+  }, [establish]);
+  attemptReconnectRef.current = attemptReconnect;
 
-  /** How many previously-granted ports exist, so the UI knows whether to offer reconnection. */
-  const [grantedPorts, setGrantedPorts] = useState(0);
-  useEffect(() => {
-    if (!WebSerialTransport.isSupported()) return;
-    void WebSerialTransport.grantedPortCount().then(setGrantedPorts);
-  }, [connection.status]);
-
-  /**
-   * Connect without Chrome's device chooser, using a port the user already permitted.
-   *
-   * Granted ports carry no identity, so the only way to find the right one is to try them in
-   * turn — several entries can point at the same headset, and stale ones fail fast at open().
-   * The first that completes a handshake is the one.
-   */
   const reconnectKnown = useCallback(async () => {
+    const generation = ++generationRef.current;
     setConnection({ status: "connecting" });
     setControlLost(false);
     const ports = await WebSerialTransport.grantedPorts();
     let lastError: unknown = new Error("No previously connected headphones are reachable.");
     for (const port of ports) {
+      if (generation !== generationRef.current) return;
       try {
-        const state = await establish(port);
+        const state = await establish(port, generation);
+        if (generation !== generationRef.current) return;
         setDeviceState(state);
         setConnection({ status: "connected" });
         return;
-      } catch (err) {
-        lastError = err;
-      }
+      } catch (error) { lastError = error; }
     }
-    setConnection({
-      status: "failed",
-      message: lastError instanceof Error ? lastError.message : "Unknown error",
+    if (generation === generationRef.current) setConnection({
+      status: "failed", message: lastError instanceof Error ? lastError.message : String(lastError),
     });
   }, [establish]);
 
-  const connect = useCallback(async () => {
+  const choosePort = useCallback(async () => {
+    const generation = ++generationRef.current;
     setConnection({ status: "connecting" });
     setControlLost(false);
     try {
-      // Must be called directly from the click handler's call stack — Web Serial requires a
-      // user gesture for requestPort(). PLAN.md §5.2.
+      // This call is made synchronously in the click handler to preserve browser user activation.
       const port = await WebSerialTransport.pickPort();
-      const state = await establish(port);
+      if (generation !== generationRef.current) return;
+      setSelection(null);
+      setGrantedPorts((current) => current?.includes(port) ? current : [...(current ?? []), port]);
+      const state = await establish(port, generation);
+      if (generation !== generationRef.current) return;
       setDeviceState(state);
       setConnection({ status: "connected" });
-    } catch (err) {
-      setConnection({
-        status: "failed",
-        message: err instanceof Error ? err.message : "Unknown error",
-      });
+    } catch (error) {
+      if (generation !== generationRef.current) return;
+      setSelection(null);
+      setConnection({ status: "failed", message: error instanceof Error ? error.message : String(error) });
     }
   }, [establish]);
 
+  const connect = useCallback(() => {
+    if (grantedPorts === null) return;
+    if (grantedPorts.length) void reconnectKnown();
+    else void choosePort();
+  }, [grantedPorts, reconnectKnown, choosePort]);
+
   const reset = useCallback(() => {
-    cancelledRef.current = true; // stop any in-flight reconnect loop from clobbering this reset
+    generationRef.current += 1;
+    window.nullpoint?.cancelSerialPort(null);
+    setSelection(null);
     setControlLost(false);
     setConnection({ status: "idle" });
     setDeviceState(null);
-    // Detach and close rather than just dropping the reference: an abandoned session keeps
-    // polling for battery every minute and keeps the port open, and the headset only has the
-    // one control channel to give.
-    const previous = headphonesRef.current;
-    unsubscribeRef.current?.();
-    unsubscribeRef.current = null;
-    headphonesRef.current = null;
-    void previous?.disconnect().catch(() => undefined);
-  }, []);
+    retire();
+  }, [retire]);
 
-  return {
-    connection,
-    deviceState,
-    controlLost,
-    connect,
-    reconnectKnown,
-    grantedPorts,
-    reset,
-    headphones: headphonesRef.current,
-  };
+  useEffect(() => () => {
+    generationRef.current += 1;
+    window.nullpoint?.cancelSerialPort(null);
+    retire();
+  }, [retire]);
+
+  return { connection, deviceState, controlLost, connect, reconnectKnown, choosePort, grantedPorts, reset,
+    selection, selectPort: (requestId: number, id: string) => {
+      window.nullpoint?.selectSerialPort(requestId, id);
+    }, headphones: headphonesRef.current };
 }

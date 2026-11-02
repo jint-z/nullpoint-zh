@@ -46,8 +46,8 @@ function textBytes(s: string): number[] {
   return Array.from(new TextEncoder().encode(s));
 }
 
-function ack(): Uint8Array {
-  return packageDataForBt(DataType.ACK, 0, Uint8Array.from([]));
+function ack(seq = 0): Uint8Array {
+  return packageDataForBt(DataType.ACK, seq, Uint8Array.from([]));
 }
 
 /**
@@ -85,12 +85,14 @@ function createFakeDevice({
   noiseAdaptation = false,
   extras = false,
   upmixSeries = false,
+  autoPowerOffBehavior = "accept",
 }: {
   table2?: boolean;
   noiseAdaptation?: boolean;
   extras?: boolean;
   /** The spatial-upmix picker, which some headsets offer in place of the cinema toggle. */
   upmixSeries?: boolean;
+  autoPowerOffBehavior?: "accept" | "reject" | "malformed";
 } = {}) {
   const ncAsmType = noiseAdaptation
     ? NcAsmInquiredType.MODE_NC_ASM_DUAL_NC_MODE_SWITCH_AND_ASM_SEAMLESS_NA
@@ -113,6 +115,7 @@ function createFakeDevice({
     poweredOff: false,
     headGesture: false,
     autoPowerOff: AutoPowerOff.AFTER_30_MIN as number,
+    autoPowerOffSetAttempted: false,
     bgmEnabled: false,
     bgmRoom: RoomSize.MIDDLE as number,
     upmixCinema: false,
@@ -148,9 +151,10 @@ function createFakeDevice({
   ];
 
   return (sent: Uint8Array) => {
-    const { dataType, payload } = decodeFrameBody(sent.subarray(1, sent.length - 1));
+    const { dataType, payload, seq } = decodeFrameBody(sent.subarray(1, sent.length - 1));
+    if (dataType === DataType.ACK) return [];
     const command = payload[0] as CommandT1;
-    const replies: Uint8Array[] = [ack()];
+    const replies: Uint8Array[] = [ack(1 - seq)];
     const mdr = (bytes: number[]) => packageDataForBt(DataType.DATA_MDR, 0, Uint8Array.from(bytes));
     const mdr2 = (bytes: number[]) => packageDataForBt(DataType.DATA_MDR_NO2, 0, Uint8Array.from(bytes));
 
@@ -350,6 +354,10 @@ function createFakeDevice({
         break; // ACK only
 
       case CommandT1.POWER_GET_PARAM:
+        if (state.autoPowerOffSetAttempted && autoPowerOffBehavior === "malformed") {
+          replies.push(mdr([CommandT1.POWER_RET_PARAM, PowerInquiredType.AUTO_POWER_OFF_WEARING_DETECTION, state.autoPowerOff]));
+          break;
+        }
         replies.push(
           mdr([
             CommandT1.POWER_RET_PARAM,
@@ -360,7 +368,8 @@ function createFakeDevice({
         );
         break;
       case CommandT1.POWER_SET_PARAM:
-        state.autoPowerOff = payload[2]!;
+        state.autoPowerOffSetAttempted = true;
+        if (autoPowerOffBehavior !== "reject") state.autoPowerOff = payload[2]!;
         break; // ACK only
 
       case CommandT1.SYSTEM_GET_PARAM:
@@ -464,10 +473,44 @@ function createFakeDevice({
 }
 
 describe("Headphones.connect() over a fake device", () => {
+  it("does not retry an old background request on a reopened transport", async () => {
+    const device = createFakeDevice({ extras: true });
+    let backgroundGets = 0;
+    let firstRequestStarted: () => void = () => {};
+    const firstRequest = new Promise<void>((resolve) => { firstRequestStarted = resolve; });
+    const transport = new LoopbackTransport((sent) => {
+      const { dataType, payload } = decodeFrameBody(sent.subarray(1, sent.length - 1));
+      if (dataType === DataType.DATA_MDR && payload[0] === CommandT1.AUDIO_GET_PARAM &&
+        payload[1] === AudioInquiredType.BGM_MODE_AND_ERRORCODE) {
+        backgroundGets++;
+        if (backgroundGets === 1) {
+          firstRequestStarted();
+          return [];
+        }
+      }
+      return device(sent);
+    });
+    const oldSession = new Headphones(transport);
+    await oldSession.connect();
+    await firstRequest;
+    expect(oldSession.state.settingsLoading).toBe(true);
+    await oldSession.disconnect();
+
+    const newSession = new Headphones(transport);
+    await newSession.connect();
+    await newSession.waitForInitialSettings();
+    await oldSession.waitForInitialSettings();
+    expect(backgroundGets).toBe(2);
+    expect(newSession.state.bgmMode).toEqual({ enabled: false, room: RoomSize.MIDDLE });
+    expect(oldSession.state.settingsLoading).toBe(false);
+    await newSession.disconnect();
+  }, 10_000);
+
   it("performs the full v1 handshake and populates state", async () => {
     const transport = new LoopbackTransport(createFakeDevice());
     const hp = new Headphones(transport);
     const state = await hp.connect();
+    await hp.waitForInitialSettings();
 
     expect(state.modelName).toBe("WH-1000XM6");
     expect(state.firmwareVersion).toBe("2.0.1");
@@ -493,6 +536,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice());
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     const events: Array<{ type: string; origin?: string }> = [];
     hp.on((e) => events.push(e as { type: string; origin?: string }));
@@ -513,6 +557,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice());
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     const events: Array<{ type: string; origin?: string }> = [];
     hp.on((e) => events.push(e as { type: string; origin?: string }));
@@ -533,6 +578,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice());
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     const sent = transport.sent.map((f) => decodeFrameBody(f.subarray(1, f.length - 1)));
     const deviceFrames = sent.filter((f) => f.dataType === DataType.DATA_MDR);
@@ -550,6 +596,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice());
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     // 10 steps use a +6 offset and a -6..+6 range, unlike the 6-step Clear Bass shape.
     const steps = [6, 7, 5, 6, 8, 6, 4, 6, 9, 6];
@@ -570,6 +617,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice());
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     // A frame we cannot interpret must not kill the connection — it arrives on the read loop.
     expect(() =>
@@ -597,6 +645,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport((sent) => (deaf ? [] : device(sent)));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     const before = hp.state.ncAsm;
     const events: string[] = [];
@@ -626,6 +675,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport((sent) => (deaf ? [] : device(sent)));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     const events: string[] = [];
     hp.on((e) => events.push(e.type));
@@ -643,6 +693,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice());
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
     await hp.setNoiseMode("ambient");
     expect(hp.state.ncAsm?.mode).toBe(NcAsmMode.ASM);
 
@@ -673,6 +724,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice());
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     await Promise.all([hp.setNoiseMode("ambient"), hp.setAmbientLevel(9)]);
 
@@ -685,6 +737,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice());
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     expect(hp.trace.enabled).toBe(false);
     expect(hp.trace.list()).toHaveLength(0);
@@ -694,6 +747,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice());
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     hp.trace.start(Date.now());
     await hp.setNoiseMode("ambient");
@@ -723,6 +777,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice());
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
     hp.trace.start(Date.now());
 
     for (let i = 0; i < 500; i++) {
@@ -741,6 +796,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice());
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     const events: string[] = [];
     hp.on((e) => events.push(e.type));
@@ -757,6 +813,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport((sent) => (deaf ? [] : device(sent)));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     const events: string[] = [];
     hp.on((e) => events.push(e.type));
@@ -776,6 +833,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ noiseAdaptation: true }));
     const hp = new Headphones(transport);
     const state = await hp.connect();
+    await hp.waitForInitialSettings();
 
     expect(state.ncAsm?.autoAmbient).toEqual({
       enabled: false,
@@ -796,6 +854,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ noiseAdaptation: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     await hp.setAutoAmbient(true, NoiseAdaptiveSensitivity.HIGH);
 
@@ -819,6 +878,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ noiseAdaptation: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
     await hp.setAutoAmbient(true, NoiseAdaptiveSensitivity.LOW);
 
     await hp.setNoiseMode("ambient");
@@ -833,6 +893,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice());
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     await expect(hp.setAutoAmbient(true)).rejects.toThrow(/don't support/i);
   });
@@ -841,6 +902,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice());
     const hp = new Headphones(transport);
     const state = await hp.connect();
+    await hp.waitForInitialSettings();
 
     expect(state.connectionMode).toBeNull();
     expect(state.upscaling).toBeNull();
@@ -860,6 +922,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
     const hp = new Headphones(transport);
     const state = await hp.connect();
+    await hp.waitForInitialSettings();
 
     expect(state.connectionMode).toBe(PriorMode.SOUND_QUALITY);
     expect(state.upscaling).toBe(UpscalingTypeAutoOff.OFF);
@@ -875,16 +938,18 @@ describe("Headphones.connect() over a fake device", () => {
     // than the one they cannot have.
     const device = createFakeDevice({ extras: true });
     const transport = new LoopbackTransport((sent) => {
-      const { payload } = decodeFrameBody(sent.subarray(1, sent.length - 1));
+      const { payload, seq } = decodeFrameBody(sent.subarray(1, sent.length - 1));
       // Advertise Speak-to-Chat, then refuse to discuss it.
       if (payload[0] === CommandT1.SYSTEM_GET_PARAM || payload[0] === CommandT1.SYSTEM_GET_EXT_PARAM) {
-        return [packageDataForBt(DataType.ACK, 0, Uint8Array.from([]))];
+        return [ack(1 - seq)];
       }
       return device(sent);
     });
     const hp = new Headphones(transport);
 
     const state = await hp.connect();
+
+    await hp.waitForInitialSettings();
 
     expect(state.modelName).toBe("WH-1000XM6");
     expect(state.ncAsm).not.toBeNull();
@@ -896,6 +961,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     await hp.setConnectionMode(PriorMode.CONNECTION_QUALITY);
     await hp.setUpscaling(UpscalingTypeAutoOff.AUTO);
@@ -909,6 +975,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     await hp.setSpeakToChat({
       enabled: true,
@@ -931,6 +998,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     await hp.setSpeakToChat({
       enabled: false, // unchanged
@@ -950,6 +1018,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
     const hp = new Headphones(transport);
     const state = await hp.connect();
+    await hp.waitForInitialSettings();
 
     expect(state.pauseOnRemoval).toBe(true);
     expect(state.speakToChat?.enabled).toBe(false);
@@ -964,6 +1033,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
     expect(hp.state.canPowerOff).toBe(true);
 
     await hp.powerOff();
@@ -980,6 +1050,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice());
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     expect(hp.state.canPowerOff).toBe(false);
     await expect(hp.powerOff()).rejects.toThrow(/power-off/i);
@@ -991,6 +1062,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport((sent) => (deaf ? [] : device(sent)));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
     expect(hp.state.upscaling).toBe(UpscalingTypeAutoOff.OFF);
 
     deaf = true;
@@ -1006,6 +1078,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
     const hp = new Headphones(transport);
     const state = await hp.connect();
+    await hp.waitForInitialSettings();
 
     expect(state.codec).toBe(AudioCodec.LDAC);
     expect(codecLabel(AudioCodec.LDAC)).toBe("LDAC");
@@ -1016,6 +1089,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
     expect(hp.state.playback).toEqual({ playing: false, available: true });
 
     await hp.playPause();
@@ -1037,6 +1111,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
     expect(hp.state.volume).toBe(12);
 
     await hp.nextTrack();
@@ -1059,6 +1134,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
     const hp = new Headphones(transport);
     const state = await hp.connect();
+    await hp.waitForInitialSettings();
 
     expect(state.autoPowerOff).toBe(AutoPowerOff.AFTER_30_MIN);
     expect(state.bgmMode).toEqual({ enabled: false, room: RoomSize.MIDDLE });
@@ -1072,6 +1148,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     const before = transport.sent.length;
     // Fire a drag's worth of positions without awaiting, as the pointer handler does.
@@ -1095,6 +1172,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     // Start a write and, before it settles, deliver a stale notification for an older position.
     const pending = hp.setVolume(25);
@@ -1125,6 +1203,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
     const hp = new Headphones(transport);
     const state = await hp.connect();
+    await hp.waitForInitialSettings();
 
     expect(state.upmixSeries).toBeNull();
     const asked = transport.sent
@@ -1138,6 +1217,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ extras: true, upmixSeries: true }));
     const hp = new Headphones(transport);
     const state = await hp.connect();
+    await hp.waitForInitialSettings();
 
     expect(state.upmixSeries).toBe(UpmixItem.NONE);
 
@@ -1158,6 +1238,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     const asked = transport.sent
       .map((f) => decodeFrameBody(f.subarray(1, f.length - 1)))
@@ -1173,6 +1254,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     await hp.setAutoPowerOff(AutoPowerOff.DISABLED);
 
@@ -1184,10 +1266,96 @@ describe("Headphones.connect() over a fake device", () => {
     expect(hp.state.autoPowerOff).toBe(AutoPowerOff.DISABLED);
   }, 30_000);
 
+  it("confirms both XM6 power-off modes by reading the headset back", async () => {
+    const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
+    const hp = new Headphones(transport);
+    await hp.connect();
+    await hp.waitForInitialSettings();
+    for (const value of [AutoPowerOff.WHEN_REMOVED, AutoPowerOff.DISABLED]) {
+      const previous = hp.state.autoPowerOff;
+      const pending = hp.setAutoPowerOff(value);
+      expect(hp.state.autoPowerOff).toBe(previous);
+      expect(hp.state.autoPowerOffWrite).toBe("pending");
+      await pending;
+      expect(hp.state.autoPowerOff).toBe(value);
+      expect(hp.state.autoPowerOffWrite).toBe("idle");
+    }
+    const frames = transport.sent.map((f) => decodeFrameBody(f.subarray(1, f.length - 1)).payload[0]);
+    const lastSet = frames.lastIndexOf(CommandT1.POWER_SET_PARAM);
+    expect(frames.slice(lastSet + 1)).toContain(CommandT1.POWER_GET_PARAM);
+  }, 30_000);
+
+  it("keeps the headset's actual value and reports a rejected power-off change", async () => {
+    const transport = new LoopbackTransport(createFakeDevice({ extras: true, autoPowerOffBehavior: "reject" }));
+    const hp = new Headphones(transport);
+    const events: string[] = [];
+    hp.on((event) => { if (event.type === "writeFailed") events.push(event.feature); });
+    await hp.connect();
+    await hp.waitForInitialSettings();
+    await hp.setAutoPowerOff(AutoPowerOff.DISABLED);
+    expect(hp.state.autoPowerOff).toBe(AutoPowerOff.AFTER_30_MIN);
+    expect(hp.state.autoPowerOffWrite).toBe("rejected");
+    expect(events).toContain("autoPowerOff");
+  }, 30_000);
+
+  it("does not claim success when power-off readback is malformed", async () => {
+    const transport = new LoopbackTransport(createFakeDevice({ extras: true, autoPowerOffBehavior: "malformed" }));
+    const hp = new Headphones(transport);
+    await hp.connect();
+    await hp.waitForInitialSettings();
+    await hp.setAutoPowerOff(AutoPowerOff.DISABLED);
+    expect(hp.state.autoPowerOff).toBe(AutoPowerOff.AFTER_30_MIN);
+    expect(hp.state.autoPowerOffWrite).toBe("unconfirmed");
+  }, 30_000);
+
+  it("reports an unconfirmed power-off change when the transport write fails", async () => {
+    const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
+    const hp = new Headphones(transport);
+    const failures: string[] = [];
+    hp.on((event) => { if (event.type === "writeFailed") failures.push(event.feature); });
+    await hp.connect();
+    await hp.waitForInitialSettings();
+    const write = transport.write.bind(transport);
+    transport.write = async (bytes) => {
+      const frame = decodeFrameBody(bytes.subarray(1, bytes.length - 1));
+      if (frame.dataType === DataType.DATA_MDR && frame.payload[0] === CommandT1.POWER_SET_PARAM) {
+        throw new Error("simulated write failure");
+      }
+      await write(bytes);
+    };
+    await hp.setAutoPowerOff(AutoPowerOff.DISABLED);
+    expect(hp.state.autoPowerOff).toBe(AutoPowerOff.AFTER_30_MIN);
+    expect(hp.state.autoPowerOffWrite).toBe("unconfirmed");
+    expect(failures).toContain("autoPowerOff");
+  }, 30_000);
+
+  it("does not send unsupported timer values to an XM6", async () => {
+    const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
+    const hp = new Headphones(transport);
+    await hp.connect();
+    await hp.waitForInitialSettings();
+    await hp.setAutoPowerOff(AutoPowerOff.AFTER_5_MIN);
+    const commands = transport.sent.map((f) => decodeFrameBody(f.subarray(1, f.length - 1)).payload[0]);
+    expect(commands).not.toContain(CommandT1.POWER_SET_PARAM);
+    expect(hp.state.autoPowerOffWrite).toBe("rejected");
+  }, 30_000);
+
+  it("keeps timer writes available to other models", async () => {
+    const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
+    const hp = new Headphones(transport);
+    await hp.connect();
+    await hp.waitForInitialSettings();
+    hp.state.modelName = "WH-1000XM5";
+    await hp.setAutoPowerOff(AutoPowerOff.AFTER_5_MIN);
+    expect(hp.state.autoPowerOff).toBe(AutoPowerOff.AFTER_5_MIN);
+    expect(hp.state.autoPowerOffWrite).toBe("idle");
+  }, 30_000);
+
   it("changes background music room size without turning it off", async () => {
     const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     await hp.setBgmMode({ enabled: true, room: RoomSize.LARGE });
 
@@ -1208,6 +1376,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     await hp.setHeadGesture(true);
 
@@ -1221,6 +1390,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ table2: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
     // connect() kicks this off without waiting for it, so ask outright rather than racing it.
     const devices = await hp.refreshPairedDevices();
 
@@ -1251,6 +1421,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ table2: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     transport.emit(
       packageDataForBt(
@@ -1279,6 +1450,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ table2: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     const named = (name: string) => pairedDeviceRecord("AA:BB:CC:DD:EE:09", 0, 0xffffff, name);
     const kindOf = (name: string) => {
@@ -1310,6 +1482,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ table2: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     transport.emit(
       packageDataForBt(
@@ -1332,6 +1505,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ table2: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     transport.emit(
       packageDataForBt(
@@ -1354,6 +1528,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice());
     const hp = new Headphones(transport);
     const state = await hp.connect();
+    await hp.waitForInitialSettings();
 
     // Not an error: the panel simply has nothing to show. And we must not have spent a
     // request on a table the headset told us it doesn't implement.
@@ -1368,6 +1543,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ table2: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     const events: Array<{ type: string }> = [];
     hp.on((e) => events.push(e));
@@ -1404,6 +1580,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ table2: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
     await hp.refreshPairedDevices();
     expect(hp.state.pairedDevices?.find((d) => d.address === IPHONE)?.connected).toBe(true);
 
@@ -1427,6 +1604,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(device);
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
     await hp.setDeviceConnection(THINKPAD, true); // both slots now in use
     expect(hp.state.pairedDevices?.find((d) => d.address === IPHONE)?.hasPlaybackRight).toBe(true);
 
@@ -1442,14 +1620,14 @@ describe("Headphones.connect() over a fake device", () => {
   it("explains why the headphones refused to move the audio", async () => {
     const device = createFakeDevice({ table2: true });
     const transport = new LoopbackTransport((sent) => {
-      const { dataType, payload } = decodeFrameBody(sent.subarray(1, sent.length - 1));
+      const { dataType, payload, seq } = decodeFrameBody(sent.subarray(1, sent.length - 1));
       if (
         dataType === DataType.DATA_MDR_NO2 &&
         payload[0] === (CommandT2.PERI_SET_EXTENDED_PARAM as number) &&
         payload[1] === PeripheralInquiredType.SOURCE_SWITCH_CONTROL
       ) {
         return [
-          packageDataForBt(DataType.ACK, 0, Uint8Array.from([])),
+          ack(1 - seq),
           packageDataForBt(
             DataType.DATA_MDR_NO2,
             0,
@@ -1466,6 +1644,7 @@ describe("Headphones.connect() over a fake device", () => {
     });
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     // Not "it didn't work" — the headset knows exactly why, so say it.
     await expect(hp.switchAudioTo(THINKPAD)).rejects.toThrow(/during a call/i);
@@ -1475,6 +1654,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ table2: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     await hp.setDeviceConnection(THINKPAD, true);
     expect(hp.state.pairedDevices?.find((d) => d.address === THINKPAD)?.connected).toBe(true);
@@ -1483,10 +1663,10 @@ describe("Headphones.connect() over a fake device", () => {
   it("reports a refusal rather than pretending the device connected", async () => {
     const device = createFakeDevice({ table2: true });
     const transport = new LoopbackTransport((sent) => {
-      const { dataType, payload } = decodeFrameBody(sent.subarray(1, sent.length - 1));
+      const { dataType, payload, seq } = decodeFrameBody(sent.subarray(1, sent.length - 1));
       if (dataType === DataType.DATA_MDR_NO2 && payload[0] === (CommandT2.PERI_SET_EXTENDED_PARAM as number)) {
         return [
-          packageDataForBt(DataType.ACK, 0, Uint8Array.from([])),
+          ack(1 - seq),
           packageDataForBt(
             DataType.DATA_MDR_NO2,
             0,
@@ -1504,6 +1684,7 @@ describe("Headphones.connect() over a fake device", () => {
     });
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     await expect(hp.setDeviceConnection(THINKPAD, true)).rejects.toThrow(/refused/i);
     expect(hp.state.pairedDevices?.find((d) => d.address === THINKPAD)?.connected).toBe(false);
@@ -1513,6 +1694,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice({ table2: true }));
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     // Claims three devices but carries one. Decoding runs on the read loop, so throwing here
     // would end the connection outright (PLAN.md standing rule 1).
@@ -1539,6 +1721,7 @@ describe("Headphones.connect() over a fake device", () => {
     const transport = new LoopbackTransport(createFakeDevice());
     const hp = new Headphones(transport);
     await hp.connect();
+    await hp.waitForInitialSettings();
 
     await hp.setAmbientLevel(0);
     // the wire message sent to the device was clamped to 1 (Headphones.cpp:191)...
@@ -1551,4 +1734,270 @@ describe("Headphones.connect() over a fake device", () => {
     // ...and the fake device's NTFY echo reconciles local state to what it actually accepted
     expect(hp.state.ncAsm?.ambientLevel).toBe(1);
   });
+});
+
+describe("confirmed listening-mode changes", () => {
+  const frame = (payload: number[]) => packageDataForBt(DataType.DATA_MDR, 0, Uint8Array.from(payload));
+  const audioSets = (transport: LoopbackTransport) => transport.sent
+    .map((bytes) => decodeFrameBody(bytes.subarray(1, bytes.length - 1)))
+    .filter((item) => item.dataType === DataType.DATA_MDR && item.payload[0] === CommandT1.AUDIO_SET_PARAM)
+    .map((item) => Array.from(item.payload));
+
+  it("waits for the matching audio type when loading listening settings", async () => {
+    const device = createFakeDevice({ extras: true });
+    let bgmAnswered = false;
+    let cinemaRequestedTooEarly = false;
+    const transport = new LoopbackTransport((sent) => {
+      const current = decodeFrameBody(sent.subarray(1, sent.length - 1));
+      const replies = device(sent) ?? [];
+      if (current.dataType === DataType.DATA_MDR && current.payload[0] === CommandT1.AUDIO_GET_PARAM &&
+        current.payload[1] === AudioInquiredType.BGM_MODE_AND_ERRORCODE) {
+        const bgmReply = replies[1]!;
+        setTimeout(() => { bgmAnswered = true; transport.emit(bgmReply); }, 40);
+        return [replies[0]!, frame([CommandT1.AUDIO_RET_PARAM, AudioInquiredType.UPMIX_CINEMA, EnableDisable.DISABLE])];
+      }
+      if (current.dataType === DataType.DATA_MDR && current.payload[0] === CommandT1.AUDIO_GET_PARAM &&
+        current.payload[1] === AudioInquiredType.UPMIX_CINEMA && !bgmAnswered) cinemaRequestedTooEarly = true;
+      return replies;
+    });
+    const hp = new Headphones(transport);
+    await hp.connect(); await hp.waitForInitialSettings();
+    expect(cinemaRequestedTooEarly).toBe(false);
+    expect(hp.state.bgmMode?.enabled).toBe(false);
+    expect(hp.state.upmixCinema).toBe(false);
+    await hp.disconnect();
+  });
+
+  it("uses the command ACK sequence even when the following readback has the old sequence", async () => {
+    const device = createFakeDevice({ extras: true });
+    let previousCommandSeq: number | null = null;
+    const transport = new LoopbackTransport((sent) => {
+      const incoming = decodeFrameBody(sent.subarray(1, sent.length - 1));
+      if (incoming.dataType === DataType.ACK) return [];
+      if (incoming.seq === previousCommandSeq) return []; // This headset drops duplicate sequences.
+      previousCommandSeq = incoming.seq;
+      return (device(sent) ?? []).map((reply) => {
+        const decoded = decodeFrameBody(reply.subarray(1, reply.length - 1));
+        const seq = decoded.dataType === DataType.ACK ? 1 - incoming.seq : incoming.seq;
+        return packageDataForBt(decoded.dataType, seq, decoded.payload);
+      });
+    });
+    const hp = new Headphones(transport);
+    await hp.connect(); await hp.waitForInitialSettings();
+    expect(await hp.setListeningMode("background")).toBe("confirmed");
+    expect(await hp.setListeningMode("cinema")).toBe("confirmed");
+    expect(await hp.setListeningMode("standard")).toBe("confirmed");
+    await hp.disconnect();
+  }, 12000);
+
+  it("recovers an accepted write with a lost ACK and ignores that ACK when it arrives late", async () => {
+    const device = createFakeDevice({ extras: true });
+    let previous: number | null = null;
+    let droppedWriteSeq: number | null = null;
+    let injectLateAck = false;
+    const transport = new LoopbackTransport((sent) => {
+      const current = decodeFrameBody(sent.subarray(1, sent.length - 1));
+      if (current.dataType === DataType.ACK) return [];
+      if (current.seq === previous) return [];
+      previous = current.seq;
+      const replies = device(sent) ?? [];
+      if (current.payload[0] === CommandT1.AUDIO_SET_PARAM &&
+        current.payload[1] === AudioInquiredType.BGM_MODE_AND_ERRORCODE) {
+        droppedWriteSeq = current.seq;
+        injectLateAck = true;
+        return replies.filter((reply) => decodeFrameBody(reply.subarray(1, reply.length - 1)).dataType !== DataType.ACK);
+      }
+      if (injectLateAck && current.payload[0] === CommandT1.AUDIO_GET_PARAM) {
+        injectLateAck = false;
+        return [ack(1 - droppedWriteSeq!), ...replies];
+      }
+      return replies;
+    });
+    const hp = new Headphones(transport);
+    await hp.connect(); await hp.waitForInitialSettings();
+    expect(await hp.setListeningMode("background")).toBe("confirmed");
+    expect(audioSets(transport)).toHaveLength(1);
+    expect(hp.state.bgmMode?.enabled).toBe(true);
+    await hp.disconnect();
+  }, 8000);
+
+  it("tries the other read sequence if an unacknowledged write never reached the device", async () => {
+    const device = createFakeDevice({ extras: true });
+    let previous: number | null = null;
+    let dropWrite = false;
+    const transport = new LoopbackTransport((sent) => {
+      const current = decodeFrameBody(sent.subarray(1, sent.length - 1));
+      if (current.dataType === DataType.ACK) return [];
+      if (dropWrite && current.payload[0] === CommandT1.AUDIO_SET_PARAM &&
+        current.payload[1] === AudioInquiredType.BGM_MODE_AND_ERRORCODE) return [];
+      if (current.seq === previous) return [];
+      previous = current.seq;
+      return device(sent);
+    });
+    const hp = new Headphones(transport);
+    await hp.connect(); await hp.waitForInitialSettings();
+    dropWrite = true;
+    expect(await hp.setListeningMode("background")).toBe("unconfirmed");
+    expect(audioSets(transport)).toHaveLength(1);
+    expect(hp.state.bgmMode?.enabled).toBe(false);
+    await hp.disconnect();
+  }, 10000);
+
+  it("enables the target first and cleans up an independent old effect only after readback", async () => {
+    const transport = new LoopbackTransport(createFakeDevice({ extras: true }));
+    const hp = new Headphones(transport);
+    await hp.connect();
+    await hp.waitForInitialSettings();
+    expect(await hp.setListeningMode("background")).toBe("confirmed");
+    const before = audioSets(transport).length;
+    expect(await hp.setListeningMode("cinema")).toBe("confirmed");
+    expect(audioSets(transport).slice(before)).toEqual([
+      [CommandT1.AUDIO_SET_PARAM, AudioInquiredType.UPMIX_CINEMA, EnableDisable.ENABLE],
+      [CommandT1.AUDIO_SET_PARAM, AudioInquiredType.BGM_MODE_AND_ERRORCODE, EnableDisable.DISABLE, RoomSize.MIDDLE],
+    ]);
+    expect(hp.state.bgmMode?.enabled).toBe(false);
+    expect(hp.state.upmixCinema).toBe(true);
+    expect(await hp.setListeningMode("standard")).toBe("confirmed");
+    await hp.disconnect();
+  });
+
+  it("does not send an unnecessary disable when the headset switches effects itself", async () => {
+    const device = createFakeDevice({ extras: true });
+    const transport = new LoopbackTransport((sent) => {
+      const { dataType, payload } = decodeFrameBody(sent.subarray(1, sent.length - 1));
+      if (dataType === DataType.DATA_MDR && payload[0] === CommandT1.AUDIO_SET_PARAM &&
+        payload[1] === AudioInquiredType.UPMIX_CINEMA && payload[2] === EnableDisable.ENABLE) {
+        device(frame([CommandT1.AUDIO_SET_PARAM, AudioInquiredType.BGM_MODE_AND_ERRORCODE, EnableDisable.DISABLE, RoomSize.MIDDLE]));
+      }
+      return device(sent);
+    });
+    const hp = new Headphones(transport);
+    await hp.connect(); await hp.waitForInitialSettings();
+    expect(await hp.setListeningMode("background")).toBe("confirmed");
+    const before = audioSets(transport).length;
+    expect(await hp.setListeningMode("cinema")).toBe("confirmed");
+    expect(audioSets(transport).slice(before)).toEqual([
+      [CommandT1.AUDIO_SET_PARAM, AudioInquiredType.UPMIX_CINEMA, EnableDisable.ENABLE],
+    ]);
+    await hp.disconnect();
+  });
+
+  it("ignores an old notification during a change and confirms the readback", async () => {
+    const device = createFakeDevice({ extras: true });
+    let changed = false;
+    const transport = new LoopbackTransport((sent) => {
+      const { dataType, payload } = decodeFrameBody(sent.subarray(1, sent.length - 1));
+      const replies = device(sent);
+      if (dataType === DataType.DATA_MDR && payload[0] === CommandT1.AUDIO_SET_PARAM &&
+        payload[1] === AudioInquiredType.BGM_MODE_AND_ERRORCODE && payload[2] === EnableDisable.ENABLE) {
+        changed = true;
+      }
+      if (changed && dataType === DataType.DATA_MDR && payload[0] === CommandT1.AUDIO_GET_PARAM &&
+        payload[1] === AudioInquiredType.BGM_MODE_AND_ERRORCODE) {
+        return [frame([CommandT1.AUDIO_NTFY_PARAM, AudioInquiredType.BGM_MODE_AND_ERRORCODE, EnableDisable.DISABLE, RoomSize.MIDDLE]), ...replies];
+      }
+      return replies;
+    });
+    const hp = new Headphones(transport);
+    await hp.connect(); await hp.waitForInitialSettings();
+    expect(await hp.setListeningMode("background")).toBe("confirmed");
+    expect(hp.state.bgmMode?.enabled).toBe(true);
+    await hp.disconnect();
+  });
+
+  it("confirms a write whose ACK is lost when readback shows it took effect", async () => {
+    const device = createFakeDevice({ extras: true });
+    const transport = new LoopbackTransport((sent) => {
+      const { dataType, payload } = decodeFrameBody(sent.subarray(1, sent.length - 1));
+      const replies = device(sent);
+      if (dataType === DataType.DATA_MDR && payload[0] === CommandT1.AUDIO_SET_PARAM &&
+        payload[1] === AudioInquiredType.BGM_MODE_AND_ERRORCODE) return [];
+      return replies;
+    });
+    const hp = new Headphones(transport);
+    await hp.connect(); await hp.waitForInitialSettings();
+    expect(await hp.setListeningMode("background")).toBe("confirmed");
+    expect(audioSets(transport)).toHaveLength(1);
+    expect(hp.state.bgmMode?.enabled).toBe(true);
+    await hp.disconnect();
+  }, 8000);
+
+  it("distinguishes a rejected change from missing readback", async () => {
+    const device = createFakeDevice({ extras: true });
+    let reject = true;
+    let suppressReadback = false;
+    const transport = new LoopbackTransport((sent) => {
+      const { dataType, payload, seq } = decodeFrameBody(sent.subarray(1, sent.length - 1));
+      if (dataType === DataType.DATA_MDR && payload[0] === CommandT1.AUDIO_SET_PARAM &&
+        payload[1] === AudioInquiredType.UPMIX_CINEMA && reject) return [ack(1 - seq)];
+      const replies = device(sent);
+      if (dataType === DataType.DATA_MDR && payload[0] === CommandT1.AUDIO_GET_PARAM &&
+        payload[1] === AudioInquiredType.BGM_MODE_AND_ERRORCODE && suppressReadback) return replies.slice(0, 1);
+      return replies;
+    });
+    const hp = new Headphones(transport);
+    await hp.connect(); await hp.waitForInitialSettings();
+    expect(await hp.setListeningMode("cinema")).toBe("rejected");
+    expect(hp.state.upmixCinema).toBe(false);
+    reject = false; suppressReadback = true;
+    expect(await hp.setListeningMode("cinema")).toBe("unconfirmed");
+    expect(hp.state.listeningModeWrite).toBe("unconfirmed");
+    await hp.disconnect();
+  }, 8000);
+
+  it("matches readbacks by audio type and accepts a reply even if its ACK is lost", async () => {
+    const device = createFakeDevice({ extras: true });
+    let changed = false;
+    const transport = new LoopbackTransport((sent) => {
+      const { dataType, payload } = decodeFrameBody(sent.subarray(1, sent.length - 1));
+      const replies = device(sent);
+      if (dataType === DataType.DATA_MDR && payload[0] === CommandT1.AUDIO_SET_PARAM &&
+        payload[1] === AudioInquiredType.BGM_MODE_AND_ERRORCODE) changed = true;
+      if (changed && dataType === DataType.DATA_MDR && payload[0] === CommandT1.AUDIO_GET_PARAM &&
+        payload[1] === AudioInquiredType.BGM_MODE_AND_ERRORCODE) {
+        return [frame([CommandT1.AUDIO_RET_PARAM, AudioInquiredType.UPMIX_CINEMA, EnableDisable.ENABLE]), ...replies.slice(1)];
+      }
+      return replies;
+    });
+    const hp = new Headphones(transport);
+    await hp.connect(); await hp.waitForInitialSettings();
+    hp.trace.start(Date.now());
+    expect(await hp.setListeningMode("background")).toBe("confirmed");
+    expect(hp.state.bgmMode?.enabled).toBe(true);
+    expect(hp.state.upmixCinema).toBe(false);
+    expect(hp.trace.list().some((entry) => entry.dataType === DataType.ACK && entry.direction === "rx" && typeof entry.seq === "number")).toBe(true);
+    expect(hp.trace.list().some((entry) => entry.dataType === DataType.ACK && entry.direction === "tx" && typeof entry.seq === "number")).toBe(true);
+    await hp.disconnect();
+  }, 8000);
+
+  it("does not continue a pending listening change after disconnect and reuse of the transport", async () => {
+    const device = createFakeDevice({ extras: true });
+    let writeStarted: () => void = () => {};
+    const started = new Promise<void>((resolve) => { writeStarted = resolve; });
+    let hold = true;
+    const transport = new LoopbackTransport((sent) => {
+      const { dataType, payload } = decodeFrameBody(sent.subarray(1, sent.length - 1));
+      if (hold && dataType === DataType.DATA_MDR && payload[0] === CommandT1.AUDIO_SET_PARAM &&
+        payload[1] === AudioInquiredType.BGM_MODE_AND_ERRORCODE) {
+        hold = false;
+        writeStarted();
+        return [];
+      }
+      return device(sent);
+    });
+    const old = new Headphones(transport);
+    await old.connect(); await old.waitForInitialSettings();
+    const operation = old.setListeningMode("background");
+    await started;
+    await old.disconnect();
+    const next = new Headphones(transport);
+    await next.connect(); await next.waitForInitialSettings();
+    expect(await operation).toBe("unconfirmed");
+    const gets = transport.sent.map((bytes) => decodeFrameBody(bytes.subarray(1, bytes.length - 1)))
+      .filter((item) => item.dataType === DataType.DATA_MDR && item.payload[0] === CommandT1.AUDIO_GET_PARAM &&
+        item.payload[1] === AudioInquiredType.BGM_MODE_AND_ERRORCODE);
+    expect(gets).toHaveLength(2); // One initial read for each session, no old-session readback.
+    expect(old.state.listeningModeWrite).toBe("idle");
+    await next.disconnect();
+  }, 8000);
 });

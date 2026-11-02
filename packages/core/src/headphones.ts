@@ -20,6 +20,7 @@ import {
   PlaybackControl,
   PowerInquiredType,
   PriorMode,
+  RoomSize,
   SystemInquiredType,
   UpmixItem,
   UpscalingTypeAutoOff,
@@ -57,6 +58,8 @@ export interface HeadphonesState {
   pauseOnRemoval: boolean | null;
   /** When the headphones switch themselves off. */
   autoPowerOff: AutoPowerOff | null;
+  /** A write is confirmed only by a subsequent response from the headset. */
+  autoPowerOffWrite: "idle" | "pending" | "unconfirmed" | "rejected";
   /** Background music mode — music placed around you rather than in your head. */
   bgmMode: Audio.BgmModeState | null;
   upmixCinema: boolean | null;
@@ -70,6 +73,13 @@ export interface HeadphonesState {
   playback: Playback.PlaybackState | null;
   /** 0–30, as the headset counts it. */
   volume: number | null;
+  /** Additional capability-gated settings are still being read in the background. */
+  settingsLoading: boolean;
+  /** The listening options must be read together before presenting them as modes. */
+  listeningSettingsLoading: boolean;
+  listeningModeWrite: ListeningWriteStatus;
+  /** Speak-to-Chat's main and detail values are separate protocol reads. */
+  speakToChatLoading: boolean;
   /** Whether the headphones accept a power-off command; there is no value to read back. */
   canPowerOff: boolean;
 }
@@ -80,6 +90,13 @@ export interface HeadphonesState {
  * in the phone app. Drives the design's "UPDATED FROM DEVICE" affordance (§5.3 rule 5).
  */
 export type StateOrigin = "local" | "device";
+export type ListeningMode = "standard" | "background" | "cinema";
+export type ListeningWriteStatus = "idle" | "pending" | "confirmed" | "rejected" | "unconfirmed";
+
+type ListeningSnapshot = {
+  bgmMode: Audio.BgmModeState | null;
+  upmixCinema: boolean | null;
+};
 
 export type HeadphonesEvent =
   | { type: "battery"; state: Battery.BatteryStatus }
@@ -147,7 +164,10 @@ export class Headphones {
    */
   readonly trace = new FrameTrace();
   private listeners = new Set<(event: HeadphonesEvent) => void>();
-  private pendingAck: (() => void) | null = null;
+  private pendingAck: { seq: number; resolve: () => void } | null = null;
+  private sessionGeneration = 0;
+  private initialSettingsTask: Promise<void> = Promise.resolve();
+  private listeningOperationSession: number | null = null;
 
   readonly state: HeadphonesState = {
     modelName: null,
@@ -162,6 +182,7 @@ export class Headphones {
     speakToChat: null,
     pauseOnRemoval: null,
     autoPowerOff: null,
+    autoPowerOffWrite: "idle",
     bgmMode: null,
     upmixCinema: null,
     upmixSeries: null,
@@ -169,6 +190,10 @@ export class Headphones {
     codec: null,
     playback: null,
     volume: null,
+    settingsLoading: false,
+    listeningSettingsLoading: false,
+    listeningModeWrite: "idle",
+    speakToChatLoading: false,
     canPowerOff: false,
   };
 
@@ -185,6 +210,12 @@ export class Headphones {
       }
     });
     transport.onDisconnect(() => {
+      this.sessionGeneration++;
+      this.listeningOperationSession = null;
+      this.state.listeningModeWrite = "idle";
+      this.state.settingsLoading = false;
+      this.state.listeningSettingsLoading = false;
+      this.state.speakToChatLoading = false;
       this.stopBatteryRefresh();
       this.emit({ type: "disconnected" });
     });
@@ -210,7 +241,9 @@ export class Headphones {
    * separately here would just re-decode the same bytes and double-emit.
    */
   async connect(): Promise<HeadphonesState> {
+    const session = ++this.sessionGeneration;
     await this.transport.open();
+    if (session !== this.sessionGeneration) throw new Error("Connection cancelled");
 
     const protocolInfo = Init.decodeRetProtocolInfo(
       await this.request(DataType.DATA_MDR, Init.encodeGetProtocolInfo(), CommandT1.CONNECT_RET_PROTOCOL_INFO)
@@ -241,21 +274,43 @@ export class Headphones {
     await this.request(DataType.DATA_MDR, Battery.encodeGetBattery(PowerInquiredType.BATTERY), CommandT1.POWER_RET_STATUS);
     await this.request(DataType.DATA_MDR, NcAsm.encodeGetNcAsm(this.ncAsmVariant), CommandT1.NCASM_RET_PARAM);
     await this.request(DataType.DATA_MDR, Eq.encodeGetEq(), CommandT1.EQEBB_RET_PARAM);
+    if (session !== this.sessionGeneration) throw new Error("Connection cancelled");
 
-    // Optional extras must never be able to fail the connection. A headset that lists a
-    // capability and then declines to answer the question about it would otherwise take the
-    // whole session down, costing the user every control rather than the one they can't have.
-    await this.readExtraSettings();
-
+    this.state.canPowerOff = this.supports(FunctionTypeT1.POWER_OFF);
+    this.state.settingsLoading = true;
+    this.state.listeningSettingsLoading = this.supports(FunctionTypeT1.LISTENING_OPTION) ||
+      this.supports(FunctionTypeT1.BGM_MODE_SMALL_MIDDLE_LARGE_AND_ERRORCODE) ||
+      this.supports(FunctionTypeT1.UPMIX_CINEMA) || this.supports(FunctionTypeT1.UPMIX_SERIES);
+    this.state.speakToChatLoading = this.supports(FunctionTypeT1.SMART_TALKING_MODE_TYPE2);
     this.startBatteryRefresh();
 
-    // Deliberately not awaited. A headset that advertises Table 2 but doesn't answer the
-    // peripheral inquiry would otherwise add the full response timeout to every connect, and
-    // the dashboard has nothing to gain from waiting — the panel fills itself in when the
-    // answer arrives, or never appears at all.
-    void this.refreshPairedDevices();
+    // Essential state is ready. Additional reads remain serialized on the same protocol queue,
+    // but are enqueued one at a time so interactive commands can run between them.
+    this.initialSettingsTask = this.loadInitialSettings(session);
 
     return this.state;
+  }
+
+  /** Wait for the first background settings pass, when a caller needs all available values. */
+  async waitForInitialSettings(): Promise<void> {
+    await this.initialSettingsTask;
+  }
+
+  private async loadInitialSettings(session: number): Promise<void> {
+    try {
+      await this.readExtraSettings(session);
+    } catch (err) {
+      if (session === this.sessionGeneration) console.warn("[ssc/core] could not finish reading additional settings:", err);
+    } finally {
+      if (session === this.sessionGeneration) {
+        this.state.settingsLoading = false;
+        this.state.listeningSettingsLoading = false;
+        this.state.speakToChatLoading = false;
+        this.emit({ type: "settings" });
+        // A non-answering Table 2 device must not hold up either connection or settings.
+        void this.refreshPairedDevices(true);
+      }
+    }
   }
 
   private supports(fn: FunctionTypeT1): boolean {
@@ -267,47 +322,19 @@ export class Headphones {
    * headset that doesn't have the feature is never made to answer a question about it, and
    * `state.<setting>` stays null — which is how the UI knows not to draw the control.
    */
-  private async readExtraSettings(): Promise<void> {
+  private async readExtraSettings(session: number): Promise<void> {
     /** One optional question. Left unanswered, the setting simply stays null. */
     const ask = async (label: string, data: Uint8Array, expect: CommandT1): Promise<void> => {
       try {
-        await this.request(DataType.DATA_MDR, data, expect);
+        const matches = expect === CommandT1.AUDIO_RET_PARAM
+          ? (payload: Uint8Array) => payload[1] === data[1] && Audio.decodeAudioParam(payload) !== null
+          : undefined;
+        await this.requestInBackground(session, DataType.DATA_MDR, data, expect, matches);
       } catch (err) {
-        console.warn(`[ssc/core] the headset claims ${label} but did not answer:`, err);
+        if (session === this.sessionGeneration) console.warn(`[ssc/core] the headset claims ${label} but did not answer:`, err);
       }
     };
 
-    if (this.supports(FunctionTypeT1.CONNECTION_MODE_SOUND_QUALITY_CONNECTION_QUALITY)) {
-      await ask(
-        "connection quality",
-        Audio.encodeGetAudioParam(AudioInquiredType.CONNECTION_MODE),
-        CommandT1.AUDIO_RET_PARAM
-      );
-    }
-    if (this.supports(FunctionTypeT1.UPSCALING_AUTO_OFF)) {
-      await ask("DSEE", Audio.encodeGetAudioParam(AudioInquiredType.UPSCALING), CommandT1.AUDIO_RET_PARAM);
-    }
-    if (this.supports(FunctionTypeT1.SMART_TALKING_MODE_TYPE2)) {
-      await ask("Speak-to-Chat", System.encodeGetSpeakToChat(), CommandT1.SYSTEM_RET_PARAM);
-      await ask("Speak-to-Chat detail", System.encodeGetSpeakToChatDetail(), CommandT1.SYSTEM_RET_EXT_PARAM);
-    }
-    if (this.supports(FunctionTypeT1.PLAYBACK_CONTROL_BY_WEARING_REMOVING_HEADPHONE_ON_OFF)) {
-      await ask(
-        "pause on removal",
-        System.encodeGetSystemParam(SystemInquiredType.PLAYBACK_CONTROL_BY_WEARING),
-        CommandT1.SYSTEM_RET_PARAM
-      );
-    }
-    if (this.supports(FunctionTypeT1.HEAD_GESTURE_ON_OFF_TRAINING)) {
-      await ask(
-        "head gestures",
-        System.encodeGetSystemParam(SystemInquiredType.HEAD_GESTURE_ON_OFF),
-        CommandT1.SYSTEM_RET_PARAM
-      );
-    }
-    if (this.supports(FunctionTypeT1.AUTO_POWER_OFF_WITH_WEARING_DETECTION)) {
-      await ask("auto power off", Battery.encodeGetAutoPowerOff(), CommandT1.POWER_RET_PARAM);
-    }
     // The headset advertises which BGM variant it speaks; both carry the same payload.
     this.bgmInquiredType = this.supports(FunctionTypeT1.BGM_MODE_SMALL_MIDDLE_LARGE_AND_ERRORCODE)
       ? AudioInquiredType.BGM_MODE_AND_ERRORCODE
@@ -336,6 +363,46 @@ export class Headphones {
         CommandT1.AUDIO_RET_PARAM
       );
     }
+    if (session === this.sessionGeneration) {
+      this.state.listeningSettingsLoading = false;
+      this.emit({ type: "settings" });
+    }
+
+    if (this.supports(FunctionTypeT1.CONNECTION_MODE_SOUND_QUALITY_CONNECTION_QUALITY)) {
+      await ask(
+        "connection quality",
+        Audio.encodeGetAudioParam(AudioInquiredType.CONNECTION_MODE),
+        CommandT1.AUDIO_RET_PARAM
+      );
+    }
+    if (this.supports(FunctionTypeT1.UPSCALING_AUTO_OFF)) {
+      await ask("DSEE", Audio.encodeGetAudioParam(AudioInquiredType.UPSCALING), CommandT1.AUDIO_RET_PARAM);
+    }
+    if (this.supports(FunctionTypeT1.SMART_TALKING_MODE_TYPE2)) {
+      await ask("Speak-to-Chat", System.encodeGetSpeakToChat(), CommandT1.SYSTEM_RET_PARAM);
+      await ask("Speak-to-Chat detail", System.encodeGetSpeakToChatDetail(), CommandT1.SYSTEM_RET_EXT_PARAM);
+      if (session === this.sessionGeneration) {
+        this.state.speakToChatLoading = false;
+        this.emit({ type: "settings" });
+      }
+    }
+    if (this.supports(FunctionTypeT1.PLAYBACK_CONTROL_BY_WEARING_REMOVING_HEADPHONE_ON_OFF)) {
+      await ask(
+        "pause on removal",
+        System.encodeGetSystemParam(SystemInquiredType.PLAYBACK_CONTROL_BY_WEARING),
+        CommandT1.SYSTEM_RET_PARAM
+      );
+    }
+    if (this.supports(FunctionTypeT1.HEAD_GESTURE_ON_OFF_TRAINING)) {
+      await ask(
+        "head gestures",
+        System.encodeGetSystemParam(SystemInquiredType.HEAD_GESTURE_ON_OFF),
+        CommandT1.SYSTEM_RET_PARAM
+      );
+    }
+    if (this.supports(FunctionTypeT1.AUTO_POWER_OFF_WITH_WEARING_DETECTION)) {
+      await ask("auto power off", Battery.encodeGetAutoPowerOff(), CommandT1.POWER_RET_PARAM);
+    }
     if (this.supports(FunctionTypeT1.CODEC_INDICATOR)) {
       await ask("the codec in use", Playback.encodeGetCodec(), CommandT1.COMMON_RET_STATUS);
     }
@@ -343,8 +410,6 @@ export class Headphones {
       await ask("playback state", Playback.encodeGetPlayback(), CommandT1.PLAY_RET_STATUS);
       await ask("volume", Playback.encodeGetVolume(), CommandT1.PLAY_RET_PARAM);
     }
-    // Nothing to read: this one is an action, not a value.
-    this.state.canPowerOff = this.supports(FunctionTypeT1.POWER_OFF);
   }
 
   /** "Pause when you take them off." */
@@ -363,7 +428,34 @@ export class Headphones {
 
   /** When the headphones switch themselves off after being left idle. */
   async setAutoPowerOff(value: AutoPowerOff): Promise<void> {
-    await this.writeSetting("autoPowerOff", value, () => Battery.encodeSetAutoPowerOff(value));
+    if (this.state.autoPowerOff === null) throw new Error("These headphones don't support autoPowerOff.");
+    if (this.state.autoPowerOffWrite === "pending") return;
+    if (this.state.modelName?.trim().toUpperCase() === "WH-1000XM6" &&
+        value !== AutoPowerOff.WHEN_REMOVED && value !== AutoPowerOff.DISABLED) {
+      this.state.autoPowerOffWrite = "rejected";
+      this.emit({ type: "settings" });
+      this.emit({ type: "writeFailed", feature: "autoPowerOff" });
+      return;
+    }
+
+    this.state.autoPowerOffWrite = "pending";
+    this.emit({ type: "settings" });
+    try {
+      await this.send(DataType.DATA_MDR, Battery.encodeSetAutoPowerOff(value));
+      const reply = await this.request(DataType.DATA_MDR, Battery.encodeGetAutoPowerOff(), CommandT1.POWER_RET_PARAM);
+      const actual = Battery.decodeAutoPowerOff(reply);
+      if (actual === null) throw new Error("Headset returned an invalid auto power off response");
+      this.state.autoPowerOff = actual;
+      this.state.autoPowerOffWrite = actual === value ? "idle" : "rejected";
+      this.emit({ type: "settings" });
+      if (actual !== value) this.emit({ type: "writeFailed", feature: "autoPowerOff" });
+      this.noteResponsive();
+    } catch {
+      this.state.autoPowerOffWrite = "unconfirmed";
+      this.emit({ type: "settings" });
+      this.emit({ type: "writeFailed", feature: "autoPowerOff" });
+      this.noteUnanswered();
+    }
   }
 
   /** Background music mode, and how far away it places what you're listening to. */
@@ -380,6 +472,151 @@ export class Headphones {
   /** Which spatial upmix is active — none, cinema, game or music. */
   async setUpmixSeries(item: UpmixItem): Promise<void> {
     await this.writeSetting("upmixSeries", item, () => Audio.encodeSetUpmixSeries(item));
+  }
+
+  /** Switch a listening mode using device readback rather than optimistic state. */
+  async setListeningMode(mode: ListeningMode): Promise<ListeningWriteStatus> {
+    const initial: ListeningSnapshot = {
+      bgmMode: this.state.bgmMode ? { ...this.state.bgmMode } : null,
+      upmixCinema: this.state.upmixCinema,
+    };
+    return this.runListeningChange(async (session) => {
+      if ((mode === "background" && !initial.bgmMode) || (mode === "cinema" && initial.upmixCinema === null)) return "rejected";
+      let allWritesAcknowledged = true;
+      const write = async (data: Uint8Array) => {
+        if (!await this.sendListeningOnce(session, data)) allWritesAcknowledged = false;
+      };
+
+      // Enabling the requested effect first lets headsets that link the two settings do the
+      // transition themselves. A cleanup is only sent after readback shows it is necessary.
+      if (mode === "background" && initial.bgmMode && !this.listeningMatches(initial, mode)) {
+        await write(Audio.encodeSetBgmMode(this.bgmInquiredType, { ...initial.bgmMode, enabled: true }));
+      } else if (mode === "cinema" && !this.listeningMatches(initial, mode)) {
+        await write(Audio.encodeSetUpmixCinema(true));
+      } else if (mode === "standard") {
+        if (initial.bgmMode?.enabled) {
+          await write(Audio.encodeSetBgmMode(this.bgmInquiredType, { ...initial.bgmMode, enabled: false }));
+        }
+        if (initial.upmixCinema === true) await write(Audio.encodeSetUpmixCinema(false));
+      }
+
+      let actual = await this.readListeningSettings(session, initial);
+      if (this.listeningMatches(actual, mode)) return "confirmed";
+
+      if (mode === "standard") {
+        // Readback established that an effect remains on; each cleanup is attempted once.
+        if (actual.bgmMode?.enabled) {
+          await write(Audio.encodeSetBgmMode(this.bgmInquiredType, { ...actual.bgmMode, enabled: false }));
+        }
+        if (actual.upmixCinema === true) await write(Audio.encodeSetUpmixCinema(false));
+        actual = await this.readListeningSettings(session, initial);
+      } else {
+        const otherOn = mode === "background" ? actual.upmixCinema === true : actual.bgmMode?.enabled === true;
+        if (otherOn) {
+          if (mode === "background") await write(Audio.encodeSetUpmixCinema(false));
+          else if (actual.bgmMode) {
+            await write(Audio.encodeSetBgmMode(this.bgmInquiredType, { ...actual.bgmMode, enabled: false }));
+          }
+          actual = await this.readListeningSettings(session, initial);
+          const otherStillOn = mode === "background" ? actual.upmixCinema === true : actual.bgmMode?.enabled === true;
+          const targetOn = mode === "background" ? actual.bgmMode?.enabled === true : actual.upmixCinema === true;
+          if (!otherStillOn && !targetOn) {
+            if (mode === "background" && actual.bgmMode) {
+              await write(Audio.encodeSetBgmMode(this.bgmInquiredType, { ...actual.bgmMode, enabled: true }));
+            } else if (mode === "cinema") await write(Audio.encodeSetUpmixCinema(true));
+            actual = await this.readListeningSettings(session, initial);
+          }
+        }
+      }
+      return this.listeningMatches(actual, mode) ? "confirmed" : allWritesAcknowledged ? "rejected" : "unconfirmed";
+    });
+  }
+
+  /** Keep the room setting and the selected mode consistent with the headphone's reply. */
+  async setListeningRoom(room: RoomSize): Promise<ListeningWriteStatus> {
+    const initial: ListeningSnapshot = {
+      bgmMode: this.state.bgmMode ? { ...this.state.bgmMode } : null,
+      upmixCinema: this.state.upmixCinema,
+    };
+    return this.runListeningChange(async (session) => {
+      if (!initial.bgmMode?.enabled) return "rejected";
+      const acknowledged = await this.sendListeningOnce(session, Audio.encodeSetBgmMode(this.bgmInquiredType, { ...initial.bgmMode, room }));
+      const actual = await this.readListeningSettings(session, initial);
+      return actual.bgmMode?.enabled && actual.bgmMode.room === room ? "confirmed" : acknowledged ? "rejected" : "unconfirmed";
+    });
+  }
+
+  private listeningMatches(state: ListeningSnapshot, mode: ListeningMode): boolean {
+    const bgm = state.bgmMode?.enabled === true;
+    const cinema = state.upmixCinema === true;
+    return mode === "background" ? bgm && !cinema : mode === "cinema" ? cinema && !bgm : !bgm && !cinema;
+  }
+
+  private async runListeningChange(action: (session: number) => Promise<"confirmed" | "rejected" | "unconfirmed">): Promise<ListeningWriteStatus> {
+    if (this.listeningOperationSession !== null) return "pending";
+    const session = this.sessionGeneration;
+    this.listeningOperationSession = session;
+    this.state.listeningModeWrite = "pending";
+    this.emit({ type: "settings" });
+    let result: ListeningWriteStatus = "unconfirmed";
+    try {
+      result = await action(session);
+    } catch {
+      // A missing or invalid readback is not proof the headphones rejected the change.
+      result = "unconfirmed";
+    } finally {
+      if (session === this.sessionGeneration) {
+        this.listeningOperationSession = null;
+        this.state.listeningModeWrite = result;
+        this.emit({ type: "settings" });
+      }
+    }
+    return result;
+  }
+
+  private async sendListeningOnce(session: number, data: Uint8Array): Promise<boolean> {
+    if (session !== this.sessionGeneration) throw new Error("Connection closed");
+    return this.enqueue(async (queuedSession) => {
+      if (queuedSession !== session) throw new Error("Connection closed");
+      const sentSeq = this.seq;
+      try {
+        await this.sendNow(DataType.DATA_MDR, data, queuedSession, 1);
+        return true;
+      } catch (err) {
+        if (session !== this.sessionGeneration || !(err instanceof Error) ||
+          err.message !== "No ACK received after retries") throw err;
+        // The headset may have accepted the write. Query with the next sequence first;
+        // the read-only query can try the previous sequence if the write never arrived.
+        this.seq = 1 - sentSeq;
+        return false;
+      }
+    });
+  }
+
+  private async readListeningSettings(session: number, available: ListeningSnapshot): Promise<ListeningSnapshot> {
+    const result: ListeningSnapshot = { bgmMode: null, upmixCinema: null };
+    const read = async (type: AudioInquiredType) => {
+      if (session !== this.sessionGeneration) throw new Error("Connection closed");
+      const payload = await this.request(DataType.DATA_MDR, Audio.encodeGetAudioParam(type), CommandT1.AUDIO_RET_PARAM, 1,
+        (candidate) => candidate[1] === type && Audio.decodeAudioParam(candidate) !== null, true, true);
+      if (session !== this.sessionGeneration) throw new Error("Connection closed");
+      return Audio.decodeAudioParam(payload);
+    };
+    if (available.bgmMode) {
+      const bgm = await read(this.bgmInquiredType);
+      if (!bgm || bgm.type !== "bgmMode") throw new Error("Invalid background music readback");
+      result.bgmMode = bgm.value;
+    }
+    if (available.upmixCinema !== null) {
+      const cinema = await read(AudioInquiredType.UPMIX_CINEMA);
+      if (!cinema || cinema.type !== "upmixCinema") throw new Error("Invalid cinema readback");
+      result.upmixCinema = cinema.value;
+    }
+    this.state.bgmMode = result.bgmMode;
+    this.state.upmixCinema = result.upmixCinema;
+    this.noteResponsive();
+    this.emit({ type: "settings" });
+    return result;
   }
 
   /**
@@ -550,17 +787,18 @@ export class Headphones {
    * optional, and even devices that report support for it may not implement the peripheral
    * inquiry, so a failure here is not a failed connection — the panel just stays hidden.
    */
-  async refreshPairedDevices(): Promise<Peripheral.PairedDevice[] | null> {
+  async refreshPairedDevices(background = false): Promise<Peripheral.PairedDevice[] | null> {
     if (!this.supportsTable2) return null;
+    const session = this.sessionGeneration;
     try {
-      const payload = await this.request(
-        DataType.DATA_MDR_NO2,
-        Peripheral.encodeGetPairedDevices(),
-        CommandT2.PERI_RET_PARAM
-      );
+      const data = Peripheral.encodeGetPairedDevices();
+      const payload = background
+        ? await this.requestInBackground(session, DataType.DATA_MDR_NO2, data, CommandT2.PERI_RET_PARAM)
+        : await this.request(DataType.DATA_MDR_NO2, data, CommandT2.PERI_RET_PARAM);
+      if (session !== this.sessionGeneration) return null;
       return this.adoptPairedDevices(payload);
     } catch (err) {
-      console.warn("[ssc/core] the headset did not report its paired devices:", err);
+      if (session === this.sessionGeneration) console.warn("[ssc/core] the headset did not report its paired devices:", err);
       return null;
     }
   }
@@ -668,6 +906,12 @@ export class Headphones {
 
   /** Stop background work and close the link. */
   async disconnect(): Promise<void> {
+    this.sessionGeneration++;
+    this.listeningOperationSession = null;
+    this.state.listeningModeWrite = "idle";
+    this.state.settingsLoading = false;
+    this.state.listeningSettingsLoading = false;
+    this.state.speakToChatLoading = false;
     this.stopBatteryRefresh();
     await this.transport.close();
   }
@@ -718,12 +962,12 @@ export class Headphones {
       // itself and that announcement is what confirms it landed, so we must be listening
       // before the write goes out — but starting the clock before the queue reaches us would
       // burn the timeout waiting behind another command.
-      await this.enqueue(async () => {
+      await this.enqueue(async (session) => {
         const settled = this.waitForSettledNcAsm(CONFIRM_TIMEOUT_MS);
         // If the write itself fails we never reach the await below, so claim the rejection
         // now — an unowned one surfaces as an unhandled rejection well after we've recovered.
         settled.catch(() => undefined);
-        await this.sendNow(DataType.DATA_MDR, NcAsm.encodeSetNcAsm(next, this.ncAsmVariant));
+        await this.sendNow(DataType.DATA_MDR, NcAsm.encodeSetNcAsm(next, this.ncAsmVariant), session);
         await settled;
       });
       this.noteResponsive();
@@ -808,9 +1052,8 @@ export class Headphones {
     this.noteUnanswered();
     if (this.unanswered < DECLARE_LOST_AFTER + RECLAIM_AFTER_FAILED_PROBES) return;
     this.unanswered = 0;
-    this.stopBatteryRefresh();
-    void this.transport
-      .close()
+    void this
+      .disconnect()
       .catch(() => undefined)
       .then(() => this.emit({ type: "disconnected" }));
   }
@@ -862,13 +1105,26 @@ export class Headphones {
   /**
    * Send a command and wait for the ACK the device sends for every command frame.
    *
-   * The sequence number is driven by the device, not toggled locally: every frame we receive
-   * updates `this.seq` (see handleFrame), and outgoing commands carry whatever it last was.
-   * That mirrors BluetoothWrapper::recvCommand/sendCommand upstream — toggling it ourselves
-   * drifts out of step with the headset and it stops replying.
+   * The ACK to a command supplies the sequence for the next command. Unsolicited notifications
+   * and RET frames have their own sequence: using those here can resend the previous command's
+   * sequence and cause the headset to ignore subsequent requests.
    */
   private async send(dataType: DataType, data: Uint8Array): Promise<void> {
-    return this.enqueue(() => this.sendNow(dataType, data));
+    return this.enqueue((session) => this.sendNow(dataType, data, session));
+  }
+
+  /** Yield the protocol queue between background ACK retries. */
+  private async requestInBackground(session: number, dataType: DataType, data: Uint8Array,
+    expectCommand: CommandT1 | CommandT2, matches?: (payload: Uint8Array) => boolean): Promise<Uint8Array> {
+    for (let attempt = 0; attempt < MAX_SEND_ATTEMPTS; attempt++) {
+      if (session !== this.sessionGeneration) throw new Error("Connection closed");
+      try {
+        return await this.request(dataType, data, expectCommand, 1, matches);
+      } catch (err) {
+        if (!(err instanceof Error) || err.message !== "No ACK received after retries" || attempt + 1 === MAX_SEND_ATTEMPTS) throw err;
+      }
+    }
+    throw new Error("Connection closed");
   }
 
   /**
@@ -882,8 +1138,13 @@ export class Headphones {
    */
   private queue: Promise<unknown> = Promise.resolve();
 
-  private enqueue<T>(task: () => Promise<T>): Promise<T> {
-    const run = this.queue.then(task, task);
+  private enqueue<T>(task: (session: number) => Promise<T>): Promise<T> {
+    const session = this.sessionGeneration;
+    const guarded = () => {
+      if (session !== this.sessionGeneration) throw new Error("Connection closed");
+      return task(session);
+    };
+    const run = this.queue.then(guarded, guarded);
     // Keep the chain alive regardless of how the previous task ended.
     this.queue = run.then(
       () => undefined,
@@ -892,19 +1153,22 @@ export class Headphones {
     return run;
   }
 
-  private async sendNow(dataType: DataType, data: Uint8Array): Promise<void> {
-    for (let attempt = 0; attempt < MAX_SEND_ATTEMPTS; attempt++) {
-      const frame = packageDataForBt(dataType, this.seq, data);
+  private async sendNow(dataType: DataType, data: Uint8Array, session: number, attempts = MAX_SEND_ATTEMPTS): Promise<void> {
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      if (session !== this.sessionGeneration) throw new Error("Connection closed");
+      const seq = this.seq;
+      const frame = packageDataForBt(dataType, seq, data);
       const ackPromise = new Promise<void>((resolve) => {
-        this.pendingAck = resolve;
+        this.pendingAck = { seq: 1 - seq, resolve };
       });
-      this.trace.record("tx", dataType, data, Date.now());
+      this.trace.record("tx", dataType, data, Date.now(), seq);
       await this.transport.write(frame);
       const timedOut = await Promise.race([
         ackPromise.then(() => false),
         new Promise<boolean>((resolve) => setTimeout(() => resolve(true), ACK_TIMEOUT_MS)),
       ]);
       this.pendingAck = null;
+      if (session !== this.sessionGeneration) throw new Error("Connection closed");
       if (!timedOut) return;
     }
     throw new Error("No ACK received after retries");
@@ -919,7 +1183,10 @@ export class Headphones {
    */
   private async sendAck(receivedSeq: number): Promise<void> {
     try {
-      await this.transport.write(packageDataForBt(DataType.ACK, 1 - receivedSeq, new Uint8Array(0)));
+      const seq = 1 - receivedSeq;
+      const payload = new Uint8Array(0);
+      this.trace.record("tx", DataType.ACK, payload, Date.now(), seq);
+      await this.transport.write(packageDataForBt(DataType.ACK, seq, payload));
     } catch (err) {
       console.warn("[ssc/core] failed to ACK a device frame:", err);
     }
@@ -929,17 +1196,26 @@ export class Headphones {
   private request(
     dataType: DataType,
     data: Uint8Array,
-    expectCommand: CommandT1 | CommandT2
+    expectCommand: CommandT1 | CommandT2,
+    attempts = MAX_SEND_ATTEMPTS,
+    matches: (payload: Uint8Array) => boolean = () => true,
+    acceptResponseWithoutAck = false,
+    recoverSequence = false
   ): Promise<Uint8Array> {
     // Queued as one unit: the listener must be armed before the write, and no other command
     // may interleave between the two.
-    return this.enqueue(async () => {
+    return this.enqueue(async (session) => {
+      let timer: ReturnType<typeof setTimeout>;
+      let unsubscribe = () => {};
+      let observed: Uint8Array | null = null;
       const responsePromise = new Promise<Uint8Array>((resolve, reject) => {
-        const timer = setTimeout(() => {
+        timer = setTimeout(() => {
           unsubscribe();
           reject(new Error(`Timed out waiting for response 0x${expectCommand.toString(16)}`));
-        }, ACK_TIMEOUT_MS);
-        const unsubscribe = this.onRawResponse(dataType, expectCommand, (payload) => {
+        }, ACK_TIMEOUT_MS * (recoverSequence ? 2 : 1) + 250);
+        unsubscribe = this.onRawResponse(dataType, expectCommand, (payload) => {
+          if (!matches(payload)) return;
+          observed = payload;
           clearTimeout(timer);
           unsubscribe();
           resolve(payload);
@@ -948,8 +1224,37 @@ export class Headphones {
       // Same reason as in writeNcAsm: a failed write means nothing ever awaits this, and its
       // own timeout would then reject into the void.
       responsePromise.catch(() => undefined);
-      await this.sendNow(dataType, data);
-      return responsePromise;
+      try {
+        const sentSeq = this.seq;
+        const sendRead = async (count: number): Promise<boolean> => {
+          const readSeq = this.seq;
+          try {
+            await this.sendNow(dataType, data, session, count);
+            return false;
+          } catch (err) {
+            if (acceptResponseWithoutAck && observed && session === this.sessionGeneration) {
+              // A matching response proves this read was accepted even if its ACK was lost.
+              this.seq = 1 - readSeq;
+              return true;
+            }
+            throw err;
+          }
+        };
+        try {
+          if (await sendRead(attempts)) return observed!;
+        } catch (err) {
+          if (!recoverSequence || session !== this.sessionGeneration || !(err instanceof Error) ||
+            err.message !== "No ACK received after retries") throw err;
+          // The previous SET may have been accepted while its ACK was lost. Retry only this
+          // read-only query with the alternate sequence; never blindly repeat the SET.
+          this.seq = 1 - sentSeq;
+          if (await sendRead(1)) return observed!;
+        }
+        return await responsePromise;
+      } finally {
+        clearTimeout(timer!);
+        unsubscribe();
+      }
     });
   }
 
@@ -976,11 +1281,14 @@ export class Headphones {
   }
 
   private handleFrame(frame: DecodedFrame): void {
-    // Every frame the headset sends advances the shared sequence number.
-    this.seq = frame.seq;
+    this.trace.record("rx", frame.dataType, frame.payload, Date.now(), frame.seq);
 
     if (frame.dataType === DataType.ACK) {
-      this.pendingAck?.();
+      const pending = this.pendingAck;
+      if (pending && frame.seq === pending.seq) {
+        this.seq = frame.seq;
+        pending.resolve();
+      }
       return;
     }
     const isTable1 = frame.dataType === DataType.DATA_MDR;
@@ -991,7 +1299,6 @@ export class Headphones {
     void this.sendAck(frame.seq);
 
     const command = frame.payload[0]!;
-    this.trace.record("rx", frame.dataType, frame.payload, Date.now());
     for (const cb of this.rawResponseListeners.get(`${frame.dataType}:${command}`) ?? []) cb(frame.payload);
 
     if (isTable2) {
@@ -1072,6 +1379,8 @@ export class Headphones {
       case CommandT1.AUDIO_NTFY_PARAM: {
         const param = Audio.decodeAudioParam(frame.payload);
         if (!param) break;
+        if (command === CommandT1.AUDIO_NTFY_PARAM && this.listeningOperationSession === this.sessionGeneration &&
+          (param.type === "bgmMode" || param.type === "upmixCinema")) break;
         if (param.type === "connectionMode") this.state.connectionMode = param.value;
         else if (param.type === "upscaling") this.state.upscaling = param.value;
         else if (param.type === "bgmMode") this.state.bgmMode = param.value;

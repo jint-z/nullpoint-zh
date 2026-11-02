@@ -1,6 +1,6 @@
 {
   "name": "@ssc/web",
-  "version": "1.2.0",
+  "version": "1.2.6",
   "private": true,
   "description": "Nullpoint web app (PWA) — Chrome/Edge desktop only, Web Serial transport",
   "license": "Apache-2.0",
@@ -9,6 +9,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --noEmit",
+    "test:ui": "playwright test",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -21,6 +22,7 @@
     "react-icons": "^5.7.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@types/w3c-web-serial": "^1.0.7",

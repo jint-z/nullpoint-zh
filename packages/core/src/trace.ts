@@ -12,6 +12,8 @@ export interface TracedFrame {
   at: number;
   direction: "tx" | "rx";
   dataType: DataType;
+  /** Wire sequence number, including for ACK frames. */
+  seq: number;
   /** Decoded command name where we know it, otherwise the raw byte. */
   label: string;
   payload: Uint8Array;
@@ -81,12 +83,13 @@ export class FrameTrace {
     this.notify();
   }
 
-  record(direction: "tx" | "rx", dataType: DataType, payload: Uint8Array, now: number): void {
+  record(direction: "tx" | "rx", dataType: DataType, payload: Uint8Array, now: number, seq: number): void {
     if (!this.enabled) return;
     this.frames.push({
       at: now - this.started,
       direction,
       dataType,
+      seq,
       label: labelFrame(dataType, payload),
       // Copied: the caller's buffer is reused by the transport.
       payload: new Uint8Array(payload),
@@ -114,7 +117,7 @@ export class FrameTrace {
       .map(
         (f) =>
           `${String(f.at).padStart(7)}ms  ${f.direction.toUpperCase()}  ` +
-          `dt=${String(f.dataType).padStart(2)}  ${f.label.padEnd(32)}  ${formatBytes(f.payload)}`
+          `dt=${String(f.dataType).padStart(2)}  seq=${f.seq}  ${f.label.padEnd(32)}  ${formatBytes(f.payload)}`
       )
       .join("\n");
   }

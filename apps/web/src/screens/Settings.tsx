@@ -5,6 +5,7 @@ import { CapabilityReport } from "../components/CapabilityReport.js";
 import { ProtocolInspector } from "../components/ProtocolInspector.js";
 import { SpatialDemo } from "../components/SpatialDemo.js";
 import { ACCENTS, type AccentName, type AppSettings } from "../state/useSettings.js";
+import { TitleBar } from "./TitleBar.js";
 
 const THEMES: Array<AppSettings["theme"]> = ["system", "dark", "light"];
 
@@ -59,40 +60,23 @@ export function Settings({
 
   return (
     <div className="screen" style={{ height: "100%", display: "flex", flexDirection: "column", background: "var(--bg)" }}>
-      <div
-        style={{
-          height: 44,
-          flex: "none",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "0 14px",
-          borderBottom: "1px solid var(--line)",
-          background: "var(--panel)",
-        }}
-      >
-        <div style={{ display: "flex", gap: 7 }}>
-          <div style={{ width: 11, height: 11, borderRadius: "50%", background: "var(--dot)" }} />
-          <div style={{ width: 11, height: 11, borderRadius: "50%", background: "var(--dot)" }} />
-          <div style={{ width: 11, height: 11, borderRadius: "50%", background: "var(--dot)" }} />
-        </div>
-        <div className="mono" style={{ fontWeight: 600, fontSize: 11, letterSpacing: "0.16em", color: "var(--fg2)" }}>
-          {tr("SETTINGS")}</div>
-        <button
-          onClick={onDone}
-          style={{ background: "none", border: "none", color: "var(--accent)", fontWeight: 500, fontSize: 11, padding: "6px 8px" }}
-        >
-          {tr("Done")}</button>
-      </div>
+      <TitleBar onDone={onDone} />
 
       <div style={{ flex: 1, overflow: "auto" }}>
         <div
           className="measure-narrow"
           style={{ padding: "20px 24px 32px", display: "flex", flexDirection: "column", gap: 18 }}
         >
+        <h1 style={{ margin: 0, fontSize: 22, fontWeight: 600 }}>{tr("Settings")}</h1>
         <div className="mono" style={{ fontWeight: 600, fontSize: 11, letterSpacing: "0.14em", color: "var(--fg3)" }}>
           {tr("GENERAL")}</div>
         <div style={{ border: "1px solid var(--line)", borderRadius: 10, overflow: "hidden" }}>
+          <div className="settings-language">
+            <label htmlFor="app-language">{tr("Language")}</label>
+            <select id="app-language" value={settings.language} onChange={(event) => void update({ language: event.target.value as AppSettings["language"] })}>
+              <option value="zh-CN">简体中文</option><option value="en">English</option>
+            </select>
+          </div>
           {tr(rows.map((row, i) => (
             <div
               key={row.key}

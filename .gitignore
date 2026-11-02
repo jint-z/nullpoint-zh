@@ -8,3 +8,7 @@ release/
 .DS_Store
 .vite/
 coverage/
+test-results/
+validation/.native-test-profile/
+validation/.archive-check/
+validation/.upgrade-guard-test/

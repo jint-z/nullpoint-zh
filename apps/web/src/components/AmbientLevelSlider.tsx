@@ -19,6 +19,7 @@ const SENSITIVITY_OPTIONS: Array<{ value: NoiseAdaptiveSensitivity; label: strin
  * information the person needs.
  */
 export function AmbientLevelSlider({
+  section = "basic",
   active,
   level,
   focusOnVoice,
@@ -27,6 +28,7 @@ export function AmbientLevelSlider({
   onFocusOnVoiceChange,
   onAutoAmbientChange,
 }: {
+  section?: "basic" | "advanced";
   active: boolean;
   level: number;
   focusOnVoice: boolean;
@@ -39,6 +41,7 @@ export function AmbientLevelSlider({
   const drag = useLinearDrag(0, 20, onLevelChange);
   const frac = level / 20;
 
+  if (section === "advanced" && !autoAmbient) return null;
   return (
     <div
       style={{
@@ -54,6 +57,7 @@ export function AmbientLevelSlider({
         transition: "opacity .18s ease",
       }}
     >
+      {section === "basic" && <>
       <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
         <label style={{ fontWeight: 500, fontSize: 12, color: "var(--fg2)" }}>{tr("Ambient level")}</label>
         <div className="mono" style={{ fontWeight: 600, fontSize: 13, color: "var(--fg)" }}>
@@ -62,13 +66,14 @@ export function AmbientLevelSlider({
       </div>
       <div
         role="slider"
-        tabIndex={0}
+        tabIndex={active ? 0 : -1}
+        aria-disabled={!active}
         aria-label={tr("Ambient level")}
         aria-valuemin={0}
         aria-valuemax={20}
         aria-valuenow={level}
-        onPointerDown={(e) => drag.onPointerDown(e, false)}
-        onKeyDown={(e) => drag.onKeyDown(e, level)}
+        onPointerDown={active ? (e) => drag.onPointerDown(e, false) : undefined}
+        onKeyDown={active ? (e) => drag.onKeyDown(e, level) : undefined}
         style={{
           position: "relative",
           height: 26,
@@ -86,7 +91,7 @@ export function AmbientLevelSlider({
             left: 0,
             height: 6,
             borderRadius: 3,
-            background: "var(--amber)",
+            background: "var(--accent)",
             width: `${frac * 100}%`,
           }}
         />
@@ -97,7 +102,7 @@ export function AmbientLevelSlider({
             width: 16,
             height: 16,
             borderRadius: "50%",
-            background: "var(--amber)",
+            background: "var(--accent)",
             border: "3px solid var(--panel2)",
             boxShadow: "0 1px 4px rgba(0,0,0,.45)",
           }}
@@ -108,9 +113,10 @@ export function AmbientLevelSlider({
         <div>10</div>
         <div>{tr("20 · OPEN")}</div>
       </div>
+      </>}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 9, marginTop: 2 }}>
-        {tr(autoAmbient && (
+        {tr(section === "advanced" && autoAmbient && (
           <>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
               <div>
@@ -120,11 +126,12 @@ export function AmbientLevelSlider({
               </div>
               <Switch
                 checked={autoAmbient.enabled}
+                disabled={!active}
                 onChange={(enabled) => onAutoAmbientChange(enabled)}
                 ariaLabel="Auto ambient level"
               />
             </div>
-            <Collapse open={autoAmbient.enabled} parentGap={9}>
+            <Collapse open={autoAmbient.enabled && active} parentGap={9}>
               <div
                 role="radiogroup"
                 aria-label={tr("Auto ambient sensitivity")}
@@ -137,6 +144,7 @@ export function AmbientLevelSlider({
                       key={option.value}
                       role="radio"
                       aria-checked={selected}
+                      disabled={!active}
                       onClick={() => onAutoAmbientChange(true, option.value)}
                       className="mono"
                       style={{
@@ -148,8 +156,8 @@ export function AmbientLevelSlider({
                         borderRadius: 6,
                         cursor: "pointer",
                         color: selected ? "var(--bg)" : "var(--fg3)",
-                        background: selected ? "var(--amber)" : "none",
-                        border: `1px solid ${selected ? "var(--amber)" : "var(--line)"}`,
+                        background: selected ? "var(--accent)" : "none",
+                        border: `1px solid ${selected ? "var(--accent)" : "var(--line)"}`,
                       }}
                     >
                       {tr(option.label)}
@@ -160,14 +168,14 @@ export function AmbientLevelSlider({
             </Collapse>
           </>
         ))}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
+        {section === "basic" && <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10 }}>
           <div>
             <div style={{ fontWeight: 500, fontSize: 12, color: "var(--fg2)" }}>{tr("Focus on voice")}</div>
             <div className="mono" style={{ marginTop: 3, fontSize: 10, color: "var(--fg3)" }}>
               {tr("Passes speech through")}</div>
           </div>
-          <Switch checked={focusOnVoice} onChange={onFocusOnVoiceChange} ariaLabel="Focus on voice" />
-        </div>
+          <Switch checked={focusOnVoice} disabled={!active} onChange={onFocusOnVoiceChange} ariaLabel="Focus on voice" />
+        </div>}
       </div>
     </div>
   );

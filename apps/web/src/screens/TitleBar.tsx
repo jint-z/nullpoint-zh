@@ -1,60 +1,20 @@
 import { tr } from "../i18n.js";
-/** design/SoundConnect Desktop.dc.html §1b window chrome (dots + wordmark). */
-export function TitleBar({
-  statusColor = "var(--dot)",
-  onSettingsClick,
-}: {
-  statusColor?: string;
+
+/** The native Windows caption buttons occupy the overlay's safe area. */
+export function TitleBar({ onSettingsClick, onDone }: {
   onSettingsClick?: () => void;
+  onDone?: () => void;
+  statusColor?: string;
 }) {
   return (
-    <div
-      style={{
-        height: 44,
-        flex: "none",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        padding: "0 14px",
-        borderBottom: "1px solid var(--line)",
-        background: "var(--panel)",
-      }}
-    >
-      <div style={{ display: "flex", gap: 7 }}>
-        <div style={{ width: 11, height: 11, borderRadius: "50%", background: "var(--dot)" }} />
-        <div style={{ width: 11, height: 11, borderRadius: "50%", background: "var(--dot)" }} />
-        <div style={{ width: 11, height: 11, borderRadius: "50%", background: "var(--dot)" }} />
+    <header className={typeof window !== "undefined" && window.nullpoint ? "app-titlebar desktop-titlebar" : "app-titlebar"}>
+      <div className="titlebar-content">
+        <div className="titlebar-brand"><span>NULLPOINT</span></div>
+        <button className="titlebar-action" onClick={onDone ?? onSettingsClick}>
+          {onDone ? <span aria-hidden="true">←</span> : <span aria-hidden="true">⚙</span>}
+          {tr(onDone ? "Done" : "Settings")}
+        </button>
       </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        <div style={{ width: 9, height: 9, borderRadius: "50%", background: statusColor }} />
-        <div className="mono" style={{ fontWeight: 600, fontSize: 11, letterSpacing: "0.16em", color: "var(--fg2)" }}>
-          {tr("NULLPOINT")}</div>
-      </div>
-      {/* It was 11px of --fg3 with no affordance, which read as a caption rather than the only
-          control in the bar. Now it carries weight, an icon, and answers to the pointer. */}
-      <button
-        className="titlebar-action"
-        onClick={onSettingsClick}
-        disabled={!onSettingsClick}
-        style={{ cursor: onSettingsClick ? "pointer" : "default" }}
-      >
-        <svg
-          width={14}
-          height={14}
-          viewBox="0 0 16 16"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={1.5}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <circle cx="8" cy="8" r="2.3" />
-          {/* Eight teeth, drawn as spokes so the gear stays legible at 14px where a toothed
-              outline turns to mush. */}
-          <path d="M8 1.4v1.9M8 12.7v1.9M14.6 8h-1.9M3.3 8H1.4M12.67 3.33l-1.35 1.35M4.68 11.32l-1.35 1.35M12.67 12.67l-1.35-1.35M4.68 4.68 3.33 3.33" />
-        </svg>
-        {tr("Settings")}</button>
-    </div>
+    </header>
   );
 }
